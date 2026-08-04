@@ -1,8 +1,0 @@
-NONZERO_EXIT err_both_headers
-NONZERO_EXIT err_two_models
-NONZERO_EXIT err_dup_ids
-NONZERO_EXIT err_dom_haploid
-NONZERO_EXIT err_colnums_3pos
-NONZERO_EXIT gone_score_list
-NONZERO_EXIT gone_glm
-NONZERO_EXIT gone_vscore

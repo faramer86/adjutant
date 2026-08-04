@@ -64,9 +64,14 @@ adjutant: $(OBJ)
 	$(MKDIR) -p bin
 	$(CXX) $(ARCH32) $(OBJ) -o bin/adjutant $(BLASFLAGS64) $(LDFLAGS)
 
+# Built only when the test source is present.  It reads fixtures under Tests/,
+# and neither ships in the release, so guarding the target keeps `make` honest
+# in a clone rather than failing on a missing prerequisite.
+ifneq ($(wildcard adjutant_pgs_eval_test.cc),)
 pgs_eval_test: adjutant_pgs_eval.o adjutant_pgs_eval_test.o $(OBJ)
 	mkdir -p bin
 	$(CXX) $(ARCH32) adjutant_pgs_eval_test.o $(filter-out adjutant.o,$(OBJ)) -o bin/pgs_eval_test $(BLASFLAGS64) $(LDFLAGS)
+endif
 
 # Optimised build.  Two things to preserve here:
 #  * -ffp-contract=off is NOT optional: it stops the compiler fusing

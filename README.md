@@ -43,15 +43,36 @@ here.
 
 ## Quick start
 
-Every example below runs against `example/` — a 300-sample, 40-variant dataset
-committed to this repo, where `HEIGHT` is genuinely built from `PGS_B`, so the
-tool has something real to find. It ships as both a `.bed/.bim/.fam` trio and a
-`.pgen/.pvar/.psam` one; the examples use `--bfile`, and `--pfile demo` works
-identically.
+**Every example below runs against [`example/`](example/)** — a complete,
+committed set of working input files. Clone the repo and they run as written:
 
 ```sh
 cd example
 ```
+
+300 samples and 40 variants, small enough to read, and not random noise:
+`HEIGHT` is genuinely generated from `PGS_B`, so the tool has a real answer to
+find. The genotypes ship as both a `.bed/.bim/.fam` trio and a
+`.pgen/.pvar/.psam` one; the examples use `--bfile`, and `--pfile demo` works
+identically.
+
+### The input files, and what each is for
+
+| File | Needed by | Format |
+|---|---|---|
+| `demo.bed/.bim/.fam` | `--bfile` | genotypes, PLINK 1 binary |
+| `demo.pgen/.pvar/.psam` | `--pfile` | genotypes, PLINK 2 |
+| `weights.txt` | `--score` | variant ID, effect allele, then one weight column per model |
+| `pheno.txt` | `--pheno` | `#IID` then one column per trait |
+| `covar.txt` | `--covar` | `#IID` then one column per covariate |
+| `partitions.txt` | `--score-partitions` | variant ID, then one 0/1 column per partition |
+| `pairs.txt` | `--pgs-pheno-pairs` | two columns: phenotype, PGS |
+| `target.bim` | `--bim` | the target's allele coding |
+| `published_pgs.txt` | `--pgs-model` | chr, pos, effect allele, other allele, beta, freq |
+| `demo.afreq` | `--read-freq` | allele frequencies |
+
+Copy any of them as a template for your own data — see
+[example/README.md](example/README.md) for how they were made.
 
 ---
 
@@ -332,36 +353,30 @@ Non-converged rows sort last, `NA` in every numeric field.
 
 ---
 
-## Verifying a build
+## Checking a build
 
-### The numerics
+`--score` output is **byte-identical to stock plink2**. That is the design
+contract, and it is why the build uses `-ffp-contract=off` — the flag stops the
+compiler fusing multiply-add in the scoring dot product, which is what keeps
+`-O3` identical to `-O2` and to upstream.
+
+You do not have to take that on trust. If you have plink2 installed, check it
+against your own data:
 
 ```sh
-make pgs_eval_test && ./bin/pgs_eval_test     # 422 checks, 0 failures
+plink2   --bfile mydata --score w.txt 1 2 header-read --out ref
+adjutant --bfile mydata --score w.txt 1 2 header-read --out mine
+diff ref.sscore mine.sscore        # expected: no output
 ```
 
-Self-contained, no data or scripts needed. It compares coefficients, standard
-errors and R² against values computed once by statsmodels and R, and the
-harmonisation statuses against `bigsnpr::snp_match()`; the reference values are
-committed under `Tests/`, so neither Python nor R is needed to run it.
+Byte-identity holds exactly for a native build on the platform the comparison
+is run on. Across toolchains the differences are confined to fields whose true
+value is zero — the largest disagreement measured anywhere is 5.9e-18, in
+columns where the score cancels and only rounding residue survives.
 
-### The `--score` contract
-
-`--score` output must stay **byte-identical to stock plink2**. That is why the
-build uses `-ffp-contract=off` — it stops the compiler fusing multiply-add in
-the scoring dot product, which is what keeps `-O3` identical to `-O2`.
-
-`score_regression_golden/` holds 126 files captured from stock plink2 for that
-purpose. To check a build yourself, run the commands recorded in each `.log`
-and diff the `.sscore` against its golden — the logs are normalised, so only
-the numbers differ between machines.
-
-Byte-identity holds exactly for the native macOS arm64 build the goldens were
-generated with. On Linux the differences are confined to fields whose true
-value is zero; the largest disagreement anywhere is 5.9e-18.
-
-See [Tests/README.md](Tests/README.md) for what each fixture directory holds
-and where the genotype data came from.
+The regression suites, golden plink2 output and numerical fixtures used during
+development are not part of the release; they are large, and they exist to
+serve a workflow rather than a user.
 
 ---
 

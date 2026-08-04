@@ -35,6 +35,12 @@ input_matrix.sh
 demo_give_best_pgs.sh
 example/make_example_data.sh
 
+# Test fixtures and the unit-test binary they feed.  Kept locally; example/ is
+# what ships, and it is what the README walks through.
+Tests/
+score_regression_golden/
+adjutant_pgs_eval_test.cc
+
 # Outputs from running the README examples, so following along does not dirty
 # the tree.  The inputs (demo.*, weights.txt, ...) are committed.
 example/result.*
