@@ -1,16 +1,17 @@
 # Test data
 
-Everything the four verification suites read. All of it is committed so that
-`./score_check.sh`, `./input_matrix.sh`, `./pgs_eval_check.sh` and
-`./demo_give_best_pgs.sh` run on a fresh clone with nothing else to download.
+Reference data and fixtures for verifying a build. `make pgs_eval_test` reads
+the fixture directories directly and needs nothing else; the golden `--score`
+output under `../score_regression_golden/` is there to diff a build against by
+hand.
 
-| Path | Used by | What it is |
-|---|---|---|
-| `TEST_PHASED_VCF/` | `score_check.sh`, `pgs_eval_check.sh`, `demo_give_best_pgs.sh` | 2504 samples, chrM and chr21 subsets |
-| `input_matrix/` | `input_matrix.sh` | the same cohort as both a `.pgen` and a `.bed` fileset, plus weight files |
-| `pgs_eval_fixtures/` | `pgs_eval_check.sh` | reference values from statsmodels and R |
-| `pgs_match_fixtures/` | `pgs_eval_check.sh` | reference output from `bigsnpr::snp_match()` |
-| `score_fixtures/` | `score_check.sh` | weight files for the golden cases |
+| Path | What it is |
+|---|---|
+| `TEST_PHASED_VCF/` | 2504 samples, chrM and chr21 subsets |
+| `input_matrix/` | the same cohort as both a `.pgen` and a `.bed` fileset, plus weight files |
+| `pgs_eval_fixtures/` | reference values from statsmodels and R, read by `pgs_eval_test` |
+| `pgs_match_fixtures/` | reference output from `bigsnpr::snp_match()` |
+| `score_fixtures/` | weight files for the golden `--score` cases |
 
 ## Provenance of the genotypes
 
@@ -36,13 +37,14 @@ alongside the values they produce.
 ## Golden `--score` output
 
 `../score_regression_golden/` holds 126 files captured from stock plink2 and is
-the contract `score_check.sh` enforces: adjutant's `--score` output must match
-them byte for byte. A run compares 89 of them — `gone_*` (proof that a removed
-command is refused) and `_failures.txt` (the expected-nonzero-exit list) are
-excluded from the diff by design.
+the contract adjutant's `--score` output must match byte for byte. 89 are
+directly comparable; the rest are `gone_*` (captured from commands this build
+removes, kept as a record of what they used to produce) and `_failures.txt`,
+the list of cases expected to exit nonzero.
 
-The `.log` files there are **normalised** by `score_regression.sh` before being
-compared or committed — version, hostname, working directory, seed and RAM are
-replaced with `<VERSION>`, `<HOST>`, `<CWD>`, `<SEED>`, `<MEM>`. Those fields
-differ on every machine, so a raw log would both fail the comparison and leak
-the path it was generated in.
+The `.log` files there are **normalised** — version, hostname, working
+directory, seed and RAM are replaced with `<VERSION>`, `<HOST>`, `<CWD>`,
+`<SEED>`, `<MEM>`. Those fields differ on every machine, so a raw log would
+both defeat the comparison and leak the path it was generated in. Each log's
+"Options in effect" block records the exact command that produced its
+`.sscore`, which is what makes the goldens reproducible by hand.

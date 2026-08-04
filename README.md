@@ -334,26 +334,34 @@ Non-converged rows sort last, `NA` in every numeric field.
 
 ## Verifying a build
 
+### The numerics
+
 ```sh
-./score_check.sh          # 89 golden files, byte-identical vs stock plink2
-./input_matrix.sh         # 36 input and filter combinations
-./pgs_eval_check.sh       # 422 unit checks + 155 end-to-end
-./demo_give_best_pgs.sh   # simulates a known effect and recovers it
+make pgs_eval_test && ./bin/pgs_eval_test     # 422 checks, 0 failures
 ```
 
-All four run on a fresh clone, with no external data.
+Self-contained, no data or scripts needed. It compares coefficients, standard
+errors and R² against values computed once by statsmodels and R, and the
+harmonisation statuses against `bigsnpr::snp_match()`; the reference values are
+committed under `Tests/`, so neither Python nor R is needed to run it.
 
-`score_check.sh` is the one that matters most: `--score` output must stay
-byte-identical to stock plink2. That is why the build uses `-ffp-contract=off`
-— it stops the compiler fusing multiply-add in the scoring dot product, which is
-what keeps `-O3` identical to `-O2`.
+### The `--score` contract
+
+`--score` output must stay **byte-identical to stock plink2**. That is why the
+build uses `-ffp-contract=off` — it stops the compiler fusing multiply-add in
+the scoring dot product, which is what keeps `-O3` identical to `-O2`.
+
+`score_regression_golden/` holds 126 files captured from stock plink2 for that
+purpose. To check a build yourself, run the commands recorded in each `.log`
+and diff the `.sscore` against its golden — the logs are normalised, so only
+the numbers differ between machines.
 
 Byte-identity holds exactly for the native macOS arm64 build the goldens were
-generated with. On Linux the differences are confined to fields whose true value
-is zero; the largest disagreement anywhere is 5.9e-18.
+generated with. On Linux the differences are confined to fields whose true
+value is zero; the largest disagreement anywhere is 5.9e-18.
 
-The example data is reproducible too: `example/make_example_data.sh` rebuilds
-every derived file from the committed genotypes, deterministically.
+See [Tests/README.md](Tests/README.md) for what each fixture directory holds
+and where the genotype data came from.
 
 ---
 

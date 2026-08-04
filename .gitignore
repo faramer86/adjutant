@@ -24,6 +24,17 @@ docs/
 tools/
 .venv/
 
+# Verification suites and the example-data generator.  They drive the golden
+# data under Tests/ and score_regression_golden/, which do ship -- but the
+# scripts themselves are maintainer tooling, kept on disk and out of the
+# release.  `make pgs_eval_test` is the self-contained check that remains.
+score_check.sh
+score_regression.sh
+pgs_eval_check.sh
+input_matrix.sh
+demo_give_best_pgs.sh
+example/make_example_data.sh
+
 # Outputs from running the README examples, so following along does not dirty
 # the tree.  The inputs (demo.*, weights.txt, ...) are committed.
 example/result.*
