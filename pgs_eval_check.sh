@@ -76,7 +76,7 @@ col() {  # col <file> <COLUMN NAME> -> 1-based index
 # invoke bin/adjutant, so building only the unit-test binary let the suite
 # report green against whatever adjutant happened to be on disk -- including one
 # built from different source.  SKIP_BUILD=1 skips only the adjutant build, for
-# callers that just built it themselves (tools/verify_and_commit.sh);
+# callers that just built it themselves;
 # pgs_eval_test is always built because nothing else builds it.
 TARGETS="pgs_eval_test"
 [ "${SKIP_BUILD:-0}" = "1" ] || TARGETS="$TARGETS adjutant"

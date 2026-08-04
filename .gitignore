@@ -16,8 +16,12 @@ __pycache__/
 dist/
 *.o.tmp
 
-# Local working notes and scratch directories.
+# Local working notes, scratch directories, and the development scaffolding
+# that produced this tree from plink2 (dead-code detectors, the pruning
+# pipeline, release-build helpers, the commit gate).  Useful to a maintainer,
+# noise to everyone else, so they stay on disk and out of the release.
 docs/
+tools/
 .venv/
 
 # Outputs from running the README examples, so following along does not dirty
