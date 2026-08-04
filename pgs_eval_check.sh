@@ -2224,6 +2224,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# A long score-column name must not smash the stack.
+#
+# The .best_pgs row writer used a fixed char[4096] and copied the PGS_ID and
+# the PHENO into it with unbounded strcpya().  Both come verbatim from a header
+# line in a user-supplied file and nothing capped either length, so a .sscore
+# whose score-column name ran past about 3.6 kB overflowed the buffer -- a
+# stack smash reachable purely by handing adjutant a crafted input file.
+#
+# 8000 characters is comfortably past the old limit and nowhere near any real
+# name, so this fails loudly on the old code and costs nothing on the new.
+# ---------------------------------------------------------------------------
+LONGNAME=$(awk 'BEGIN{s=""; while (length(s) < 8000) s = s "X"; print s}')
+awk -F'\t' -v ln="$LONGNAME" '
+  NR==1 { print "#IID\tALLELE_CT\t" ln "_AVG"; next }
+  { print $1 "\t100\t0." (NR % 97) }' "$WDIR/direct.sscore" > "$WDIR/longname.sscore"
+
+bin/adjutant --sscore "$WDIR/longname.sscore" \
+  --pheno "$WDIR/pheno.txt" --pheno-name QT1 \
+  --give-best-pgs --out "$WDIR/longname" > "$WDIR/longname_out.txt" 2>&1
+LONG_RC=$?
+need "$WDIR/longname.best_pgs" "--sscore: a long score-column name produced nothing"
+
+LONG_ID=$(awk -F'\t' -v c="$C_PGS_ID" 'NR==2{print length($c)}' "$WDIR/longname.best_pgs")
+if [ "$LONG_RC" -eq 0 ] && [ "$LONG_ID" = "8000" ]; then
+  echo "PASS  --sscore: an 8000-character score name is written, not overflowed"
+else
+  echo "FAIL  --sscore: long score name -- exit $LONG_RC, PGS_ID length '$LONG_ID' (want 0 and 8000)"
+  tail -3 "$WDIR/longname_out.txt"; exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Cases 45-46: --sscore auto-detection must not rank non-score columns.
 #
 # --score's DEFAULT column set includes 'phenos', so the .sscore it writes is

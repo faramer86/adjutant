@@ -1560,7 +1560,28 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
   }
 
   {
-    char wbuf[4096];
+    // Size the row buffer from the names it will actually hold.
+    //
+    // This was a fixed char[4096] with two unbounded strcpya() calls into it --
+    // the PGS_ID and the PHENO, both taken verbatim from a header line in a
+    // user-supplied file.  Nothing capped either length anywhere, on either
+    // route, so a .sscore whose score-column name ran past about 3.6 kB
+    // smashed the stack: driven entirely by an input file, which is exactly
+    // the file a user is most likely to have been handed by someone else.
+    //
+    // 512 covers the fixed part -- TYPE, N, N_CASE, FOLDS and 15 numeric
+    // fields, each at most kMaxDoubleGSlen (13) plus a tab, under 400 in all.
+    uintptr_t max_name_slen = strlen(pheno_name);
+    for (uint32_t ki = 0; ki != fit_ct; ++ki) {
+      const uintptr_t sc_slen = strlen(score_col_names[keep_idxs? keep_idxs[ki] : ki]);
+      if (sc_slen > max_name_slen) {
+        max_name_slen = sc_slen;
+      }
+    }
+    char* wbuf = S_CAST(char*, malloc(2 * max_name_slen + 512));
+    if (unlikely(!wbuf)) {
+      return kPglRetNomem;
+    }
     for (uint32_t ki = 0; ki != fit_ct; ++ki) {
       const BestPgsRow* rr = &pheno_rows[ki];
       char* wp = wbuf;
@@ -1652,9 +1673,11 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
 
       const uint32_t line_len = S_CAST(uint32_t, wp - wbuf);
       if (unlikely(fwrite(wbuf, line_len, 1, *outfile_ptr) != 1)) {
+        free(wbuf);
         return kPglRetWriteFail;
       }
     }
+    free(wbuf);
   }
 
   return reterr;
