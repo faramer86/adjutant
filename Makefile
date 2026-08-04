@@ -60,8 +60,14 @@ endif
 all: adjutant
 
 # for clean build, "make clean" first
+# rm -f before linking, always.  The linker truncates and rewrites the existing
+# file in place, and overwriting the text pages of a binary another process is
+# still executing wedges that process in uninterruptible state on macOS -- it
+# then survives kill -9 and clears only on reboot.  Unlinking first leaves any
+# running instance on the old inode and gives the new binary a fresh one.
 adjutant: $(OBJ)
 	$(MKDIR) -p bin
+	rm -f bin/adjutant
 	$(CXX) $(ARCH32) $(OBJ) -o bin/adjutant $(BLASFLAGS64) $(LDFLAGS)
 
 # Built only when the test source is present.  It reads fixtures under Tests/,
@@ -70,6 +76,7 @@ adjutant: $(OBJ)
 ifneq ($(wildcard adjutant_pgs_eval_test.cc),)
 pgs_eval_test: adjutant_pgs_eval.o adjutant_pgs_eval_test.o $(OBJ)
 	mkdir -p bin
+	rm -f bin/pgs_eval_test
 	$(CXX) $(ARCH32) adjutant_pgs_eval_test.o $(filter-out adjutant.o,$(OBJ)) -o bin/pgs_eval_test $(BLASFLAGS64) $(LDFLAGS)
 endif
 

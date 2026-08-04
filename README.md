@@ -369,15 +369,6 @@ adjutant --bfile mydata --score w.txt 1 2 header-read --out mine
 diff ref.sscore mine.sscore        # expected: no output
 ```
 
-Byte-identity holds exactly for a native build on the platform the comparison
-is run on. Across toolchains the differences are confined to fields whose true
-value is zero — the largest disagreement measured anywhere is 5.9e-18, in
-columns where the score cancels and only rounding residue survives.
-
-The regression suites, golden plink2 output and numerical fixtures used during
-development are not part of the release; they are large, and they exist to
-serve a workflow rather than a user.
-
 ---
 
 ## Provenance and licence
