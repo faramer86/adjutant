@@ -1,0 +1,22 @@
+PLINK <VERSION>
+Options in effect:
+  --hardy
+  --out <TMP>/gone_hardy
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Random number seed: <SEED>
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+Calculating allele frequencies... done.
+Computing chrX Hardy-Weinberg p-values... done.
+--hardy: Autosomal Hardy-Weinberg report (founders only) written to
+<TMP>/gone_hardy.hardy .
+--hardy: chrX Hardy-Weinberg report (founders only) written to
+<TMP>/gone_hardy.hardy.x .
+

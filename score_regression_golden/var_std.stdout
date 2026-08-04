@@ -1,0 +1,22 @@
+PLINK <VERSION>
+(C) 2005-2026 Shaun Purcell, Christopher Chang    GNU General Public License v3
+Options in effect:
+  --extract <TMP>/autosomal.txt
+  --out <TMP>/var_std
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header ignore-dup-ids variance-standardize
+
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+--extract: 472 variants remaining.
+Calculating allele frequencies... 0%done.
+472 variants remaining after main filters.
+Warning: --score: 37 entries in <TMP>/score_multi.txt were skipped due
+to missing variant IDs.
+(Add the 'list-variants' modifier to see which variants were actually used for
+scoring.)
+--score: 472 variants processed.
+--score: Results written to <TMP>/var_std.sscore .

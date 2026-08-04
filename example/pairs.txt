@@ -1,0 +1,3 @@
+# phenotype  PGS
+HEIGHT	PGS_B
+DISEASE	PGS_B

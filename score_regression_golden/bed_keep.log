@@ -1,0 +1,30 @@
+PLINK <VERSION>
+Options in effect:
+  --bfile Tests/TEST_PHASED_VCF/mt
+  --extract <TMP>/autosomal.txt
+  --keep <TMP>/keep.txt
+  --out <TMP>/bed_keep
+  --score <TMP>/score_multi.txt 1 2 3 header ignore-dup-ids
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Random number seed: <SEED>
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt.fam.
+109 variants loaded from Tests/TEST_PHASED_VCF/mt.bim.
+Note: No phenotype data present.
+--extract: 100 variants remaining.
+--keep: 834 samples remaining.
+834 samples (436 females, 398 males; 832 founders) remaining after main
+filters.
+Calculating allele frequencies... done.
+100 variants remaining after main filters.
+Warning: --score: 409 entries in <TMP>/score_multi.txt were skipped
+due to missing variant IDs.
+(Add the 'list-variants' modifier to see which variants were actually used for
+scoring.)
+--score: 100 variants processed.
+--score: Results written to <TMP>/bed_keep.sscore .
+

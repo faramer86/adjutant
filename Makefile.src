@@ -1,0 +1,147 @@
+CWARN = -Wall -Wextra -Wshadow -Wformat-security -Wstrict-aliasing -Wdouble-promotion -Wfloat-conversion
+CXXWARN = ${CWARN} -Wold-style-cast
+
+# Necessary for older gcc versions.
+CWARN2 = -Wall -Wextra -Wshadow -Wformat-security -Wstrict-aliasing
+CXXWARN2 = ${CWARN2} -Wold-style-cast
+
+CSRC = include/SFMT.c \
+       libdeflate/lib/adler32.c \
+       libdeflate/lib/crc32.c \
+       libdeflate/lib/deflate_compress.c \
+       libdeflate/lib/deflate_decompress.c \
+       libdeflate/lib/gzip_compress.c \
+       libdeflate/lib/gzip_decompress.c \
+       libdeflate/lib/utils.c \
+       libdeflate/lib/zlib_compress.c \
+       libdeflate/lib/zlib_decompress.c \
+       libdeflate/lib/arm/arm_cpu_features.c \
+       libdeflate/lib/x86/x86_cpu_features.c
+
+ZCSRC = zstd/lib/common/debug.c \
+        zstd/lib/common/entropy_common.c \
+        zstd/lib/common/error_private.c \
+        zstd/lib/common/fse_decompress.c \
+        zstd/lib/common/pool.c \
+        zstd/lib/common/threading.c \
+        zstd/lib/common/xxhash.c \
+        zstd/lib/common/zstd_common.c \
+        zstd/lib/compress/fse_compress.c \
+        zstd/lib/compress/hist.c \
+        zstd/lib/compress/huf_compress.c \
+        zstd/lib/compress/zstd_compress.c \
+        zstd/lib/compress/zstd_compress_literals.c \
+        zstd/lib/compress/zstd_compress_sequences.c \
+        zstd/lib/compress/zstd_compress_superblock.c \
+        zstd/lib/compress/zstd_double_fast.c \
+        zstd/lib/compress/zstd_fast.c \
+        zstd/lib/compress/zstd_lazy.c \
+        zstd/lib/compress/zstd_ldm.c \
+        zstd/lib/compress/zstd_opt.c \
+        zstd/lib/compress/zstd_preSplit.c \
+        zstd/lib/compress/zstdmt_compress.c \
+        zstd/lib/decompress/huf_decompress.c \
+        zstd/lib/decompress/zstd_ddict.c \
+        zstd/lib/decompress/zstd_decompress.c \
+        zstd/lib/decompress/zstd_decompress_block.c
+
+ZSSRC = zstd/lib/decompress/huf_decompress_amd64.S
+
+PGENLIB_CCSRC = include/plink2_base.cc \
+                include/plink2_bits.cc \
+                include/plink2_simd.cc \
+                include/pgenlib_misc.cc \
+                include/pgenlib_read.cc
+
+PLINK2LIB_CCSRC = $(PGENLIB_CCSRC) \
+                  include/plink2_bgzf.cc \
+                    include/plink2_float.cc \
+                      include/plink2_htable.cc \
+                  include/plink2_memory.cc \
+                    include/plink2_string.cc \
+                  include/plink2_text.cc \
+                  include/plink2_thread.cc \
+                  include/plink2_zstfile.cc
+
+TEXTLIB_CCSRC = include/plink2_base.cc \
+                include/plink2_bits.cc \
+                include/plink2_bgzf.cc \
+                include/plink2_htable.cc \
+                include/plink2_memory.cc \
+                include/plink2_simd.cc \
+                include/plink2_string.cc \
+                include/plink2_text.cc \
+                include/plink2_thread.cc \
+                include/plink2_zstfile.cc
+
+CCSRC = $(PLINK2LIB_CCSRC) \
+        adjutant.cc \
+        adjutant_cmdline.cc \
+        adjutant_common.cc \
+        adjutant_compress_stream.cc \
+        adjutant_data.cc \
+        adjutant_decompress.cc \
+        adjutant_filter.cc \
+        adjutant_help.cc \
+        adjutant_matrix.cc \
+        adjutant_matrix_calc.cc \
+        adjutant_pgs_eval.cc \
+        adjutant_pgs_match.cc \
+        adjutant_psam.cc \
+        adjutant_pvar.cc
+
+ZLIB_VER = 1.3.2
+
+OBJ_NO_ZSTD = $(CSRC:.c=.o) $(CCSRC:.cc=.o)
+OBJ = $(CSRC:.c=.o) $(ZCSRC:.c=.o) $(ZSSRC:.S=.o) $(CCSRC:.cc=.o)
+PGENLIB_OBJ = $(PGENLIB_CCSRC:.cc=.o)
+PLINK2LIB_OBJ = $(CSRC:.c=.o) $(ZCSRC:.c=.o) $(ZSSRC:.S=.o) $(PLINK2LIB_CCSRC:.cc=.o)
+TEXTLIB_OBJ = $(CSRC:.c=.o) $(ZCSRC:.c=.o) $(ZSSRC:.S=.o) $(TEXTLIB_CCSRC:.cc=.o)
+OBJL = $(notdir $(OBJ))
+PGENLIB_OBJL = $(notdir $(PGENLIB_OBJ))
+PLINK2LIB_OBJL = $(notdir $(PLINK2LIB_OBJ))
+TEXTLIB_OBJL = $(notdir $(TEXTLIB_OBJ))
+
+CSRC2 = $(foreach fname,$(CSRC),../$(fname))
+ZCSRC2 = $(foreach fname,$(ZCSRC),../$(fname))
+ZSSRC2 = $(foreach fname,$(ZSSRC),../$(fname))
+CCSRC2 = $(foreach fname,$(CCSRC),../$(fname))
+PGENLIB_CCSRC2 = $(foreach fname,$(PGENLIB_CCSRC),../$(fname))
+PLINK2LIB_CCSRC2 = $(foreach fname,$(PLINK2LIB_CCSRC),../$(fname))
+TEXTLIB_CCSRC2 = $(foreach fname,$(TEXTLIB_CCSRC),../$(fname))
+OBJ2 = $(CSRC2:.c=.o) $(ZCSRC2:.c=.o) $(ZSSRC2:.S=.o) $(CCSRC2:.cc=.o)
+
+CSRC3 = $(foreach fname,$(CSRC),../../$(fname))
+ZCSRC3 = $(foreach fname,$(ZCSRC),../../$(fname))
+ZSSRC3 = $(foreach fname,$(ZSSRC),../../$(fname))
+CCSRC3 = $(foreach fname,$(CCSRC),../../$(fname))
+PLINK2LIB_CCSRC3 = $(foreach fname,$(PLINK2LIB_CCSRC),../../$(fname))
+TEXTLIB_CCSRC3 = $(foreach fname,$(TEXTLIB_CCSRC),../../$(fname))
+OBJ3 = $(CSRC3:.c=.o) $(ZCSRC3:.c=.o) $(ZSSRC3:.S=.o) $(CCSRC3:.cc=.o)
+
+CINCLUDE = -Ilibdeflate
+CINCLUDE2 = -I../libdeflate
+CINCLUDE3 = -I../../libdeflate
+CXXINCLUDE = -Ilibdeflate "-I../zlib-"$(ZLIB_VER)
+CXXINCLUDE2 = -I../libdeflate "-I../../zlib-"$(ZLIB_VER)
+CXXINCLUDE3 = -I../../libdeflate "-I../../../zlib-"$(ZLIB_VER)
+ZSTD_INCLUDE =
+ZSTD_INCLUDE2 =
+ZSTD_INCLUDE3 =
+
+# *.o.tmp: Apple clang writes <basename>-<hex>.o.tmp and renames it on success,
+# so a killed compile -- an interrupted make -j8, or one whose siblings abort --
+# leaves a 0-byte file behind.  *.o does not match that, so `make clean` walked
+# past them and four accumulated in the repo root.  .gitignore covers *.o.tmp,
+# so they never showed up in git status either.
+CLEAN = *.o \
+        *.o.tmp \
+        include/*.o \
+        libdeflate/lib/*.o \
+        libdeflate/lib/arm/*.o \
+        libdeflate/lib/x86/*.o \
+        zstd/lib/common/*.o \
+        zstd/lib/compress/*.o \
+        zstd/lib/decompress/*.o \
+        bin/adjutant
+CLEAN2 = $(foreach expr,$(CLEAN),../$(expr))

@@ -1,0 +1,26 @@
+PLINK <VERSION>
+Options in effect:
+  --out <TMP>/with_threads
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header ignore-dup-ids
+  --threads 1
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Random number seed: <SEED>
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+Using 1 compute thread.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+Calculating allele frequencies... done.
+2 categorical phenotypes loaded.
+Warning: --score: 18 entries in <TMP>/score_multi.txt were skipped
+since their variant IDs appear multiple times in the main dataset.
+(Add the 'list-variants' modifier to see which variants were actually used for
+scoring.)
+--score: 491 variants processed.
+--score: Results written to <TMP>/with_threads.sscore .
+

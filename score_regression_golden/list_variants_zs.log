@@ -1,0 +1,23 @@
+PLINK <VERSION>
+Options in effect:
+  --out <TMP>/list_variants_zs
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header ignore-dup-ids list-variants-zs
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Random number seed: <SEED>
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+Calculating allele frequencies... done.
+2 categorical phenotypes loaded.
+Warning: --score: 18 entries in <TMP>/score_multi.txt were skipped
+since their variant IDs appear multiple times in the main dataset.
+--score: 491 variants processed.
+--score: Variant list written to <TMP>/list_variants_zs.sscore.vars.zst .
+--score: Results written to <TMP>/list_variants_zs.sscore .
+

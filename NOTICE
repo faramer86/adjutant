@@ -1,0 +1,47 @@
+adjutant
+========
+
+adjutant is a derivative work of PLINK 2.0, cut down to polygenic-score
+computation and evaluation.
+
+    PLINK 2.0   https://github.com/chrchang/plink-ng
+                (C) 2005-2026 Shaun Purcell, Christopher Chang
+
+**The majority of this code is PLINK 2.0's**, and all of the credit for it
+belongs there. adjutant was produced by deleting commands from
+`PLINK v2.0.0-a.7.1.a` rather than by writing a scorer from scratch. In
+particular the scoring engine, the .pgen/.pvar/.psam readers, the sample and
+variant filters, the text and compression layers and the memory allocator are
+upstream code, modified little or not at all. If you use adjutant in published
+work, cite PLINK 2:
+
+    Chang CC, Chow CC, Tellier LCAM, Vattikuti S, Purcell SM, Lee JJ (2015)
+    Second-generation PLINK: rising to the challenge of larger and richer
+    datasets. GigaScience 4.
+
+What is not upstream: the PGS evaluation numerics (`adjutant_pgs_eval.*`), the
+PGS harmonisation (`adjutant_pgs_match.*`), and the flags that drive them
+(`--give-best-pgs`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
+`--score-partitions`, `--sscore`, `--pgs-model`, `--pgs-models-list`).
+
+
+Licensing
+---------
+
+Two licences apply, exactly as upstream.
+
+  LICENSE          GNU General Public License v3 — the application.
+  LICENSE.LESSER   GNU Lesser General Public License v3 — the libraries
+                   bundled under `include/` (pgenlib, plink2_text and the
+                   support code they need), which upstream distributes under
+                   the LGPL so they can be reused independently.
+
+Third-party code vendored unmodified, each under its own licence:
+
+  simde/              SIMD Everywhere — MIT (a handful of files CC0-1.0);
+                      see simde/COPYING
+  zstd/               Zstandard — dual BSD-3-Clause / GPLv2;
+                      see zstd/LICENSE and zstd/COPYING
+  libdeflate/         libdeflate — MIT; see libdeflate/COPYING
+  include/SFMT.*      SIMD-oriented Fast Mersenne Twister — BSD 3-Clause
+  include/LICENSE.QD  quad-double arithmetic — BSD 3-Clause

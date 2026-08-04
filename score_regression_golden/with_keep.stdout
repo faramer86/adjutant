@@ -1,0 +1,26 @@
+PLINK <VERSION>
+(C) 2005-2026 Shaun Purcell, Christopher Chang    GNU General Public License v3
+Options in effect:
+  --keep <TMP>/keep.txt
+  --out <TMP>/with_keep
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header ignore-dup-ids
+
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+--keep: 834 samples remaining.
+834 samples (436 females, 398 males; 832 founders) remaining after main
+filters.
+Calculating allele frequencies... 0%done.
+834 samples (436 females, 398 males; 832 founders) remaining after
+main
+filters.
+Warning: --score: 18 entries in <TMP>/score_multi.txt were skipped
+since their variant IDs appear multiple times in the main dataset.
+(Add the 'list-variants' modifier to see which variants were actually used for
+scoring.)
+--score: 491 variants processed.
+--score: Results written to <TMP>/with_keep.sscore .

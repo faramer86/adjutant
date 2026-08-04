@@ -1,0 +1,13 @@
+PLINK <VERSION>
+Options in effect:
+  --out <TMP>/err_two_models
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header center dominant
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Error: --score[-list] 'dominant', 'recessive', 'center', and
+'variance-standardize' modifiers are mutually exclusive.
+For more info, try "<PROG> --help <flag name>" or "<PROG> --help | more".
+

@@ -1,0 +1,23 @@
+PLINK <VERSION>
+Options in effect:
+  --out <TMP>/gone_pca
+  --pca
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+
+Hostname: <HOST>
+Working directory: <CWD>
+
+Random number seed: <SEED>
+<MEM> MiB RAM detected; reserving <MEM> MiB for main workspace.
+2504 samples (1270 females, 1234 males; 2497 founders) loaded from
+Tests/TEST_PHASED_VCF/mt_mixed_phase.psam.
+509 variants loaded from Tests/TEST_PHASED_VCF/mt_mixed_phase.pvar.zst.
+2 categorical phenotypes loaded.
+Calculating allele frequencies... done.
+Excluding 37 variants on non-autosomes from GRM construction.
+Constructing GRM: done.
+Excluding 37 variants on non-autosomes from PCA.
+Extracting eigenvalues and eigenvectors... done.
+--pca: Eigenvectors written to <TMP>/gone_pca.eigenvec , and eigenvalues
+written to <TMP>/gone_pca.eigenval .
+

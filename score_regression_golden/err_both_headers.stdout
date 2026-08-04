@@ -1,0 +1,10 @@
+PLINK <VERSION>
+(C) 2005-2026 Shaun Purcell, Christopher Chang    GNU General Public License v3
+Options in effect:
+  --out <TMP>/err_both_headers
+  --pfile Tests/TEST_PHASED_VCF/mt_mixed_phase vzs
+  --score <TMP>/score_multi.txt 1 2 3 header header-read
+
+Error: --score[-list] 'header' and 'header-read' modifiers cannot be used
+together.
+For more info, try "<PROG> --help <flag name>" or "<PROG> --help | more".

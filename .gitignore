@@ -1,0 +1,28 @@
+*.o
+bin/
+.DS_Store
+score_regression_out/
+__pycache__/
+*.pyc
+*.log
+*.sscore
+# ...except the golden baselines, which must be committed.  verify_and_commit.sh
+# stages with `git add -A`, which honours the two patterns above, so a newly
+# added case's .log/.sscore baseline is silently dropped from the commit and
+# score_check.sh then compares it against nothing on every fresh clone.  That is
+# how the five bed_* cases went unbaselined.
+!score_regression_golden/*.log
+!score_regression_golden/*.sscore
+dist/
+*.o.tmp
+
+# Local working notes and scratch directories.
+docs/
+.venv/
+
+# Outputs from running the README examples, so following along does not dirty
+# the tree.  The inputs (demo.*, weights.txt, ...) are committed.
+example/result.*
+example/ranked.*
+example/harmonised.*
+example/resolved.*
