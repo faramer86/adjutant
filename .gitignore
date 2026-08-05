@@ -13,7 +13,13 @@ __pycache__/
 # how the five bed_* cases went unbaselined.
 !score_regression_golden/*.log
 !score_regression_golden/*.sscore
-dist/
+# dist/* rather than dist/: git cannot re-include a file whose parent
+# directory is excluded, so a bare dist/ would make the negation below
+# silently do nothing.  README.md here is hand-written documentation --
+# build recipes, verification steps, and traps worth not rediscovering --
+# not a build artefact, and it was one 'rm -rf dist' from being lost.
+dist/*
+!dist/README.md
 *.o.tmp
 
 # Local working notes, scratch directories, and the development scaffolding
