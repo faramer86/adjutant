@@ -16,6 +16,8 @@ enough for the statistics to mean something.
 | `pairs.txt` | phenotype/PGS pairs, for `--pgs-pheno-pairs` |
 | `target.bim` | a harmonisation target |
 | `published_pgs.txt` | a "published" PGS whose alleles are deliberately mis-oriented |
+| `pgs_alpha.txt` / `pgs_beta.txt` | two overlapping models, for `--pgs-models-list` |
+| `models.txt` | the list file naming those two, one path per line |
 | `mhc.bed` / `.bim` / `.fam` | 24 variants straddling the MHC boundaries, for `--exclude-mhc-*` |
 | `mhc_weights.txt` | weights over all 24, for `--score` |
 | `mhc_pgs.txt` | the same variants keyed on chr/pos, for `--pgs-model` |
@@ -54,6 +56,14 @@ rather than a near-perfect separation that would teach nothing.
 `published_pgs.txt` has its alleles deliberately swapped and strand-flipped, so
 harmonisation reports a mix of `EXACT`, `REVERSED`, `FLIPPED` and `AMBIGUOUS`
 rather than a clean pass.
+
+`pgs_alpha.txt` and `pgs_beta.txt` cover rows 1–25 and 15–40 of `target.bim`, so
+`--pgs-models-list` has to zero-fill in both directions. Every third `beta` row
+names the **opposite** effect allele, which is what makes the merge report
+`REVERSED` rows instead of taking the weights at face value. Their 11 overlapping
+source rows collapse to only 3 nonzero in both columns, because the rest are
+strand-ambiguous — a worked example of why a `0` in `.matched` needs
+`.match_report` to interpret.
 
 ## Provenance
 

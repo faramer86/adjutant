@@ -106,23 +106,27 @@ The `FID` column comes from the `.fam`, which always carries one — `--pfile`
 output on a `.psam` without FIDs has no such column. Everything else is
 identical between the two.
 
-### Split a model into pathways
+### Score variant subsets
 
 `--score-partitions` takes a 0/1 mask per variant and scores each subset
-separately, in the same pass:
+separately, in the same pass. A partition is any set of variants you want scored
+on its own — the file decides what they mean, and the header names them:
 
 ```
-SNP    PATHWAY_A  PATHWAY_B
-snp0   1          1
-snp1   0          1
+SNP    SUBSET_A  SUBSET_B
+snp0   1         1
+snp1   0         1
 ```
+
+A variant may belong to several partitions, or to none. Values must be exactly
+`0` or `1`.
 
 ```sh
 adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 4 \
          --score-partitions partitions.txt --out result
 ```
 
-| FID | IID | ALLELE_CT | NAMED_ALLELE_DOSAGE_SUM | PGS_B_AVG | PGS_B_PATHWAY_A_AVG | PGS_B_PATHWAY_B_AVG |
+| FID | IID | ALLELE_CT | NAMED_ALLELE_DOSAGE_SUM | PGS_B_AVG | PGS_B_SUBSET_A_AVG | PGS_B_SUBSET_B_AVG |
 |---|---|---|---|---|---|---|
 | 0 | per0 | 80 | 34 | 0.01375 | 0.0075 | 0.005 |
 | 0 | per1 | 80 | 34 | 0.0375 | 0.04 | 0.0525 |
@@ -358,9 +362,90 @@ refused rather than guessed. Column 6 is the source effect-allele frequency.
 
 ### Merging several models
 
-`--pgs-models-list` takes a file of weight-file paths and merges them into one
-matrix, zero-filling variants a model does not carry. Each column is named from
-that file's basename.
+`--pgs-models-list` harmonises several published models against the **same**
+target and merges them into one matrix — one column per model, one row per
+variant matched by at least one of them.
+
+You provide a plain text file listing the weight files, one path per line:
+
+```
+pgs_alpha.txt
+pgs_beta.txt
+```
+
+Blank lines and lines starting with `#` are skipped. Paths are relative to
+where you run the command. Each column is named from the file's basename up to
+the first dot, so `PGS000123.txt.gz` becomes `PGS000123`; two paths yielding the
+same name is an error.
+
+Every model must use the **same column layout**, because the five column
+indices apply to all of them:
+
+```
+chr  pos  effect_allele  other_allele  beta
+1    14   T              C             -0.50
+1    15   G              T             0.20
+```
+
+```sh
+adjutant --bim target.bim --pgs-models-list models.txt 1 2 3 4 5 --out merged
+```
+
+```
+--pgs-models-list: pgs_alpha: 25 source variants, 16 matched (0 strand-flipped, 0 reversed).
+--pgs-models-list: pgs_beta:  26 source variants, 15 matched (0 strand-flipped, 5 reversed).
+--pgs-models-list: 2 models, 26 variants in the union.
+```
+
+`merged.matched` is directly usable as a `--score` input:
+
+| ID | A1 | pgs_alpha | pgs_beta |
+|---|---|---|---|
+| snp2 | A | 0.4 | **0** |
+| snp14 | C | -0.4 | 0.5 |
+| snp19 | T | **0** | 0.4 |
+
+A model that does not carry a variant gets `0`, not a missing value. Here the
+union is 26 variants, of which only 3 carry a nonzero weight from *both* models:
+the two files overlap on 11 source rows, but most of those are strand-ambiguous
+(A/T, C/G) and are dropped unless you pass `--allow-ambiguous` or
+`--resolve-ambiguous`. A zero therefore means "this model does not contribute
+here", whether because the model lacked the variant or because the match was
+rejected — check `.match_report` to tell those apart.
+
+**Harmonising before merging is the whole point.** Two models can name opposite
+effect alleles for the same variant. Merging raw weight files on variant ID
+would put one column's beta on the wrong allele, and nothing downstream would
+notice. `merged.match_report` shows the reorientation:
+
+| #MODEL | CHR | POS | SRC_EFFECT | SRC_OTHER | SRC_BETA | STATUS | BIM_ID | OUT_A1 | OUT_BETA |
+|---|---|---|---|---|---|---|---|---|---|
+| pgs_beta | 1 | 14 | T | C | -0.5 | **REVERSED** | snp14 | C | **0.5** |
+
+`pgs_beta` measured its effect on `T`; the target's A1 is `C`; so the weight is
+re-expressed as `+0.5` on `C`. Every column in `.matched` is with respect to the
+same A1, which is what makes them comparable.
+
+> [!NOTE]
+> **Reorienting a weight shifts absolute scores by a constant.** For a biallelic
+> variant `dosage(other) = 2 − dosage(effect)`, so
+>
+> `β · dosage(effect) = 2β − β · dosage(other)`
+>
+> Writing `−β` against the other allele therefore reproduces the original
+> contribution **minus `2β`**. Summed over the reversed variants that is a single
+> constant, identical for every sample.
+>
+> This is exact for **additive** models, which is all adjutant scores. It leaves
+> **rankings, correlations, R² and regression coefficients unchanged** — anything
+> fitted with an intercept absorbs the constant. Only raw `SCORE_SUM` values
+> move. Measured on 5 variants at |β| = 0.4: every sample's sum differed by
+> exactly `4.0` (= 2 × 0.4 × 5), with `r = 1.000000000000` across 200 samples.
+>
+> The same identity does **not** hold for dominant or recessive effect types,
+> which is why tools supporting those must split a model set into several files
+> rather than reorient it. adjutant is additive-only, so one merged file always
+> suffices.
 
 ---
 

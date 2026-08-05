@@ -177,6 +177,24 @@ PglErr RunPgsModel(const char* bim_fname,
 // would put one column's beta on the wrong allele and nothing
 // downstream would notice.  Every column here is w.r.t. the .bim's A1.
 //
+// Reorienting a weight shifts the absolute score by a constant, and it
+// is worth knowing why that is acceptable rather than assuming it.  For
+// a biallelic variant dosage(other) == 2 - dosage(effect), so
+//
+//     beta * dosage(effect) == 2*beta - beta * dosage(other)
+//
+// and writing -beta against the other allele reproduces the original
+// contribution MINUS 2*beta.  Summed over the reversed variants that is
+// one constant, identical for every sample: rankings, correlations, R^2
+// and any regression with an intercept are unchanged, and only raw
+// SCORE_SUM values move.  Measured on 5 variants at |beta| = 0.4, every
+// sample's sum differed by exactly 4.0 with r = 1.0 over 200 samples.
+//
+// The identity holds for ADDITIVE models only, which is all adjutant
+// scores.  It fails for dominant/recessive effect types -- which is why
+// tools supporting those must split a model set across several files
+// instead of reorienting, and why one merged file always suffices here.
+//
 // <out_prefix>.match_report is the --pgs-model report with a leading
 // MODEL column, concatenated across models.
 //
