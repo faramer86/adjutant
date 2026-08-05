@@ -1,4 +1,4 @@
-SNP	SUBSET_A	SUBSET_B
+SNP	PART_A	PART_B
 snp0	1	1
 snp1	0	1
 snp2	1	1

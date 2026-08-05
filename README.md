@@ -1,14 +1,12 @@
 # Adjutant 🫡
 
-**PLINK 2, cut down to polygenic scores** — computing them, evaluating them, and
-aligning published ones to your data.
+Adjutant is a **PLINK 2**, but only with kept and extended functions for polygenic scores experiments. It aligns them to the provided reference, it computes them, it evaluates them (e.g. Incremental R2), you only need to give an order.
 
-One binary, no runtime dependencies, and `--score` output that is byte-identical
+One binary, no runtime dependencies, quick, easy, with `--score` output that is byte-identical
 to stock plink2.
 
-> **Most of this code is [PLINK 2.0](https://github.com/chrchang/plink-ng)'s**,
-> and the credit belongs there. `adjutant` was made by deleting commands and reusing functions, not by
-> writing a scorer. If you publish with it, hit a star for this repository and cite PLINK 2 — see [NOTICE](NOTICE).
+> **Most of this code is reduced [PLINK 2.0](https://github.com/chrchang/plink-ng)'s**,
+> and the credit belongs there. `adjutant` was made by deleting commands and reusing functions to create new functions, not by writing a scorer. If you find it useful, hit a star for this repository and cite PLINK 2 — see [NOTICE](NOTICE).
 
 ---
 
@@ -18,9 +16,9 @@ to stock plink2.
 |---|---|---|---|
 | **Score** | genotypes + weights | `.sscore` | `--score` |
 | **Evaluate** | scores + a phenotype | `.best_pgs`, `.pgs_corr` | `--give-best-pgs`, `--give-corr-matrix` |
-| **Harmonise** | weights + a `.bim` | `.matched` | `--pgs-model` |
+| **Harmonise** | weights + a `.bim` | `.matched` | `--pgs-model`, `--pgs-models-list` |
 
-Score and evaluate run in one command. Evaluate also takes a score matrix you
+Score and evaluate can run in one command. Evaluate also takes a score matrix you
 already have (`--sscore`). Harmonise is standalone — two text files in, two out,
 no genotypes.
 
@@ -36,8 +34,9 @@ Needs a C++17 compiler, zlib, and a BLAS/LAPACK (Accelerate on macOS, OpenBLAS
 elsewhere). Everything else is vendored.
 
 Pre-built macOS arm64 and Linux x86-64 binaries — including a fully static one
-that needs no glibc — are attached to the GitHub release rather than committed
-here.
+that needs no glibc — are attached to the GitHub release:
+1) Linux (86): link
+2) MacOS: link
 
 ---
 
@@ -106,16 +105,16 @@ The `FID` column comes from the `.fam`, which always carries one — `--pfile`
 output on a `.psam` without FIDs has no such column. Everything else is
 identical between the two.
 
-### Score variant subsets
+### Split a model into partitions
 
 `--score-partitions` takes a 0/1 mask per variant and scores each subset
 separately, in the same pass. A partition is any set of variants you want scored
 on its own — the file decides what they mean, and the header names them:
 
 ```
-SNP    SUBSET_A  SUBSET_B
-snp0   1         1
-snp1   0         1
+SNP    PART_A  PART_B
+snp0   1       1
+snp1   0       1
 ```
 
 A variant may belong to several partitions, or to none. Values must be exactly
@@ -126,7 +125,7 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 4 \
          --score-partitions partitions.txt --out result
 ```
 
-| FID | IID | ALLELE_CT | NAMED_ALLELE_DOSAGE_SUM | PGS_B_AVG | PGS_B_SUBSET_A_AVG | PGS_B_SUBSET_B_AVG |
+| FID | IID | ALLELE_CT | NAMED_ALLELE_DOSAGE_SUM | PGS_B_AVG | PGS_B_PART_A_AVG | PGS_B_PART_B_AVG |
 |---|---|---|---|---|---|---|
 | 0 | per0 | 80 | 34 | 0.01375 | 0.0075 | 0.005 |
 | 0 | per1 | 80 | 34 | 0.0375 | 0.04 | 0.0525 |
