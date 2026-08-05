@@ -272,13 +272,83 @@ static char* DupStr(const char* s, uint32_t len) {
   return p;
 }
 
-static void FreeSrcVariant(SrcVariant* sv) {
-  free(sv->chr);     sv->chr     = nullptr;
-  free(sv->pos_str); sv->pos_str = nullptr;
-  free(sv->src_a1);  sv->src_a1  = nullptr;
-  free(sv->src_a0);  sv->src_a0  = nullptr;
-  free(sv->bim_id);  sv->bim_id  = nullptr;
-  free(sv->out_a1);  sv->out_a1  = nullptr;
+// Bump allocator for a model's per-variant strings.
+//
+// Each SrcVariant carries six of them -- chr, pos_str, src_a1, src_a0, bim_id,
+// out_a1 -- and a strdup apiece meant a 600k-variant model made 3.6M
+// allocations of one to twelve characters, every one paying 24-32 bytes of
+// allocator bookkeeping to hold them.  That was 227 bytes per source variant
+// measured, about 11x the size of the input file, and freeing them left the
+// heap too fragmented for the next model to reuse: peak memory climbed with
+// every model in a --pgs-models-list run instead of staying flat.
+//
+// Chunked and never realloc'd, because SrcVariant points INTO these blocks and
+// the backing store must not move.  Releasing a model is then a few free()s of
+// megabyte blocks, which the allocator can actually hand back.
+typedef struct StrArenaBlockStruct {
+  struct StrArenaBlockStruct* next;
+  size_t used;
+  size_t cap;
+} StrArenaBlock;
+
+typedef struct StrArenaStruct {
+  StrArenaBlock* head;   // every block, in allocation order
+  StrArenaBlock* cur;    // the one being filled
+} StrArena;
+
+static const size_t kStrArenaBlockBytes = 1U << 20;
+
+// Data lives immediately after the header, so a block is one allocation
+// without relying on flexible array members.
+static char* StrArenaData(StrArenaBlock* b) {
+  return (char*)(b + 1);
+}
+
+static char* StrArenaDup(StrArena* a, const char* s, uint32_t len) {
+  const size_t need = (size_t)len + 1;
+  StrArenaBlock* b = a->cur;
+  while (b && (b->cap - b->used < need)) b = b->next;   // reuse a spent block
+  if (!b) {
+    size_t cap = kStrArenaBlockBytes;
+    if (cap < need) cap = need;
+    b = (StrArenaBlock*)malloc(sizeof(StrArenaBlock) + cap);
+    if (!b) return nullptr;
+    b->next = nullptr;
+    b->used = 0;
+    b->cap  = cap;
+    if (a->cur) {
+      StrArenaBlock* tail = a->cur;
+      while (tail->next) tail = tail->next;
+      tail->next = b;
+    } else {
+      a->head = b;
+    }
+  }
+  a->cur = b;
+  char* dst = StrArenaData(b) + b->used;
+  memcpy(dst, s, len);
+  dst[len] = '\0';
+  b->used += need;
+  return dst;
+}
+
+// Hand every block back to the arena without returning it to the allocator.
+// Models are processed one at a time, so the next one refills the same memory
+// instead of making the heap churn 100k-plus allocations per model.
+static void StrArenaReset(StrArena* a) {
+  for (StrArenaBlock* b = a->head; b; b = b->next) b->used = 0;
+  a->cur = a->head;
+}
+
+static void StrArenaFree(StrArena* a) {
+  StrArenaBlock* b = a->head;
+  while (b) {
+    StrArenaBlock* nx = b->next;
+    free(b);
+    b = nx;
+  }
+  a->head = nullptr;
+  a->cur  = nullptr;
 }
 
 // -------------------------------------------------------------------
@@ -745,21 +815,35 @@ typedef struct PgsModelResultStruct {
   SrcVariant*   vars;
   uint32_t      ct;
   PgsModelStats stats;
+  // Backs every string in vars[]; freed in one go.
+  StrArena      strs;
+  // Retained across models so the vars[] buffer is grown once, to the largest
+  // model, rather than allocated and freed for every one.
+  uint32_t      cap;
 } PgsModelResult;
 
 static void PgsModelResultPreinit(PgsModelResult* r) {
   r->vars = nullptr;
   r->ct   = 0;
   memset(&r->stats, 0, sizeof(r->stats));
+  r->strs.head = nullptr;
+  r->strs.cur  = nullptr;
+  r->cap = 0;
 }
 
 static void PgsModelResultFree(PgsModelResult* r) {
-  if (r->vars) {
-    for (uint32_t ii = 0; ii < r->ct; ++ii) FreeSrcVariant(&r->vars[ii]);
-    free(r->vars);
-    r->vars = nullptr;
-  }
+  free(r->vars);
+  r->vars = nullptr;
   r->ct = 0;
+  r->cap = 0;
+  StrArenaFree(&r->strs);
+}
+
+// Between models: keep the buffers, drop the contents.
+static void PgsModelResultRecycle(PgsModelResult* r) {
+  r->ct = 0;
+  memset(&r->stats, 0, sizeof(r->stats));
+  StrArenaReset(&r->strs);
 }
 
 // -------------------------------------------------------------------
@@ -803,8 +887,15 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
     goto HarmoniseModel_ret_1;
   }
 
-  out->vars = (SrcVariant*)malloc(src_cap * sizeof(SrcVariant));
-  if (!out->vars) { reterr = kPglRetNomem; goto HarmoniseModel_ret_1; }
+  // Reuse whatever the previous model left behind; only grow.
+  if (out->cap < src_cap) {
+    SrcVariant* nv = (SrcVariant*)realloc(out->vars, src_cap * sizeof(SrcVariant));
+    if (!nv) { reterr = kPglRetNomem; goto HarmoniseModel_ret_1; }
+    out->vars = nv;
+    out->cap  = src_cap;
+  } else {
+    src_cap = out->cap;
+  }
 
   {
     double beta_sum = 0.0;
@@ -874,13 +965,14 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                                               src_cap * sizeof(SrcVariant));
         if (!ns) { reterr = kPglRetNomem; goto HarmoniseModel_ret_1; }
         out->vars = ns;
+        out->cap  = src_cap;
       }
 
       SrcVariant* sv = &out->vars[out->ct];
-      sv->chr     = DupStr(chr_tok,      chr_slen);
-      sv->pos_str = DupStr(pos_tok,      pos_slen);
-      sv->src_a1  = DupStr(col_ptrs[2],  eff_slen);
-      sv->src_a0  = DupStr(col_ptrs[3],  oth_slen);
+      sv->chr     = StrArenaDup(&out->strs, chr_tok,     chr_slen);
+      sv->pos_str = StrArenaDup(&out->strs, pos_tok,     pos_slen);
+      sv->src_a1  = StrArenaDup(&out->strs, col_ptrs[2], eff_slen);
+      sv->src_a0  = StrArenaDup(&out->strs, col_ptrs[3], oth_slen);
       sv->src_beta = beta;
       sv->src_freq = src_freq;
       sv->status  = kPgsMatchNoPos;
@@ -993,8 +1085,8 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
         if (ms == kPgsMatchFlipped || ms == kPgsMatchFlippedReversed) {
           ++out->stats.n_flipped;
         }
-        sv->bim_id  = DupStr(be->varid, (uint32_t)strlen(be->varid));
-        sv->out_a1  = DupStr(be->a1,    (uint32_t)strlen(be->a1));
+        sv->bim_id  = StrArenaDup(&out->strs, be->varid, (uint32_t)strlen(be->varid));
+        sv->out_a1  = StrArenaDup(&out->strs, be->a1, (uint32_t)strlen(be->a1));
         sv->out_beta = out_beta;
         sv->bim_idx  = bim_idx;
         if (!sv->bim_id || !sv->out_a1) {
@@ -1032,8 +1124,9 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                                         dedup_htable, key_len, dedup_htsize);
       if (dedup_idx != UINT32_MAX) {
         sv->status = kPgsMatchDuplicate;
-        free(sv->bim_id); sv->bim_id = nullptr;
-        free(sv->out_a1); sv->out_a1 = nullptr;
+        // Arena-owned: drop the reference, never free it here.
+        sv->bim_id = nullptr;
+        sv->out_a1 = nullptr;
         sv->out_beta = 0.0;
         sv->bim_idx  = UINT32_MAX;
         ++out->stats.n_duplicate;
@@ -1076,6 +1169,31 @@ static const char* PgsStatusStr(PgsMatchStatus s) {
 // One model's rows of .match_report.  `model_name` is nullptr for
 // --pgs-model, which has no MODEL column, and the model's name for
 // --pgs-models-list, which prepends one.
+// Everything the merge still needs from a model once it has been harmonised
+// and its report rows written: which .bim row, and the weight w.r.t. that
+// row's A1.
+//
+// This exists because holding whole PgsModelResults for every model did not
+// scale.  A SrcVariant is 88 bytes plus six separate strdups (chr, pos_str,
+// src_a1, src_a0, bim_id, out_a1), each paying allocator overhead to store one
+// or two characters -- 227 bytes per source variant, measured, or about 11x the
+// size of the input file.  249 models totalling 5.9 GB needed ~65 GB and were
+// OOM-killed.  At 16 bytes a hit that becomes a few GB.
+typedef struct PgsModelHitStruct {
+  uint32_t bim_idx;
+  double   out_beta;
+} PgsModelHit;
+
+// Ascending by .bim row, so the writer can walk every model with a cursor
+// instead of materialising a dense union_ct x kept_ct matrix.  Dedup already
+// guarantees at most one hit per .bim row per model, so no tie-break is needed
+// and the sort does not have to be stable.
+static int PgsModelHitCmp(const void* aa, const void* bb) {
+  const uint32_t x = ((const PgsModelHit*)aa)->bim_idx;
+  const uint32_t y = ((const PgsModelHit*)bb)->bim_idx;
+  return (x > y) - (x < y);
+}
+
 static void WriteMatchReportRows(FILE* f, const PgsModelResult* r,
                                  const char* model_name) {
   for (uint32_t ii = 0; ii < r->ct; ++ii) {
@@ -1287,12 +1405,17 @@ PglErr RunPgsModelsList(const char* bim_fname,
   uint32_t model_ct = 0;
   uint32_t model_cap = 0;
 
-  PgsModelResult* results = nullptr;
-  uint32_t        result_ct = 0;
+  // One model is live at a time; `hits` keeps only the compact residue.
+  PgsModelResult res;
+  PgsModelResultPreinit(&res);
+  PgsModelHit** hits      = nullptr;   // per model, sorted by bim_idx
+  uint32_t*     hit_ct    = nullptr;
+  uint32_t      hits_ct   = 0;         // models whose hits[] slot is live
 
   uint32_t* keep_col  = nullptr;   // model -> output column, or UINT32_MAX
-  uint32_t* union_row = nullptr;   // bim row -> matrix row, or UINT32_MAX
-  double*   mat       = nullptr;
+  uint32_t* union_row = nullptr;   // bim row -> output row, or UINT32_MAX
+  uint32_t* cursor    = nullptr;   // per kept column, position in its hits[]
+  double*   rowbuf    = nullptr;   // one output row
   uint32_t  kept_ct   = 0;
   uint32_t  union_ct  = 0;
 
@@ -1415,12 +1538,41 @@ PglErr RunPgsModelsList(const char* bim_fname,
   }
 
   // ---- Step 3: harmonise every model against it. ----
-  results = (PgsModelResult*)malloc(model_ct * sizeof(PgsModelResult));
-  if (!results) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
-  for (uint32_t mi = 0; mi != model_ct; ++mi) PgsModelResultPreinit(&results[mi]);
-  result_ct = model_ct;
+  //
+  // One model is held at a time.  Its report rows are written as soon as it is
+  // harmonised and it is then reduced to (bim_idx, out_beta) pairs, so peak
+  // memory tracks the LARGEST model plus the compact residue of the rest,
+  // rather than the sum of every model's parsed records.
+  hits   = (PgsModelHit**)calloc(model_ct, sizeof(PgsModelHit*));
+  hit_ct = (uint32_t*)calloc(model_ct, sizeof(uint32_t));
+  if (!hits || !hit_ct) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
+  hits_ct = model_ct;
+
+  // Opened before the loop because the report is now streamed into it.  A run
+  // that fails midway therefore leaves a partial .match_report; it also exits
+  // nonzero and says why, which is the signal to trust.
+  memcpy(outname_end, ".match_report", 14);
+  report_f = fopen(outname, "w");
+  if (!report_f) {
+    logerrprintfww("Error: --pgs-models-list: failed to create '%s': %s\n",
+                   outname, strerror(errno));
+    reterr = kPglRetOpenFail;
+    goto RunPgsModelsList_ret_1;
+  }
+  fputs("#MODEL\tCHR\tPOS\tSRC_EFFECT\tSRC_OTHER\tSRC_BETA\tSTATUS\t"
+        "BIM_ID\tOUT_A1\tOUT_BETA\n", report_f);
+
+  keep_col = (uint32_t*)malloc(model_ct * sizeof(uint32_t));
+  if (!keep_col) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
 
   for (uint32_t mi = 0; mi != model_ct; ++mi) {
+    // HarmoniseModel sizes its text stream from bigstack_left(), and bigstack
+    // is a stack allocator: CleanupTextStream2 closes the stream but only a
+    // BigstackReset returns the buffer.  Without this mark every model in the
+    // list took a fresh slice and kept it, which is what actually made peak
+    // memory climb with model count -- not the parsed records, which are freed.
+    unsigned char* model_bigstack_mark = g_bigstack_base;
+
     char prog_label[288];
     snprintf(prog_label, sizeof(prog_label), "%s (%u of %u)",
              names[mi], mi + 1, model_ct);
@@ -1428,29 +1580,48 @@ PglErr RunPgsModelsList(const char* bim_fname,
                             col_chr, col_pos, col_effect, col_other,
                             col_weight, col_freq, allow_ambiguous,
                             resolve_ambig, maf_threshold, &afreq_tab, mhc_region,
-                            "--pgs-models-list", prog_label, &results[mi]);
+                            "--pgs-models-list", prog_label, &res);
     if (unlikely(reterr)) goto RunPgsModelsList_ret_1;
-    const PgsModelStats* st = &results[mi].stats;
+    const PgsModelStats* st = &res.stats;
     logprintf("--pgs-models-list: %s: %u source variant%s, %u matched "
               "(%u strand-flipped, %u reversed).\n",
-              names[mi], results[mi].ct, results[mi].ct == 1 ? "" : "s",
+              names[mi], res.ct, res.ct == 1 ? "" : "s",
               st->n_matched, st->n_flipped, st->n_reversed);
-  }
 
-  // ---- Step 4: choose columns, then build the union. ----
-  keep_col = (uint32_t*)malloc(model_ct * sizeof(uint32_t));
-  if (!keep_col) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
-  for (uint32_t mi = 0; mi != model_ct; ++mi) {
-    if (!results[mi].stats.n_matched) {
+    WriteMatchReportRows(report_f, &res, names[mi]);
+
+    // bim_idx is set only on a matched row and cleared again on a duplicate,
+    // so this count equals n_matched and no .bim row repeats within a model.
+    if (st->n_matched) {
+      hits[mi] = (PgsModelHit*)malloc(st->n_matched * sizeof(PgsModelHit));
+      if (!hits[mi]) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
+      uint32_t nh = 0;
+      for (uint32_t ii = 0; ii != res.ct; ++ii) {
+        const uint32_t bi = res.vars[ii].bim_idx;
+        if (bi == UINT32_MAX) continue;
+        hits[mi][nh].bim_idx  = bi;
+        hits[mi][nh].out_beta = res.vars[ii].out_beta;
+        ++nh;
+      }
+      assert(nh == st->n_matched);
+      hit_ct[mi] = nh;
+      qsort(hits[mi], nh, sizeof(PgsModelHit), PgsModelHitCmp);
+      keep_col[mi] = kept_ct++;
+    } else {
       // An all-zero column is a constant predictor: degenerate as a PGS,
       // and it would occupy a --score-col-nums slot that predicts nothing.
       logerrprintfww("Warning: --pgs-models-list: '%s' matched no variants; "
                      "its column is omitted.\n", paths[mi]);
       keep_col[mi] = UINT32_MAX;
-    } else {
-      keep_col[mi] = kept_ct++;
     }
+
+    PgsModelResultRecycle(&res);
+    // Nothing kept above lives on bigstack -- vars, the string arena and hits
+    // are all malloc'd -- so the model's stream buffer can go back now.
+    BigstackReset(model_bigstack_mark);
   }
+
+  // ---- Step 4: build the union. ----
   if (!kept_ct) {
     logerrputs("Error: --pgs-models-list: no model matched any variant.\n");
     reterr = kPglRetMalformedInput;
@@ -1461,46 +1632,30 @@ PglErr RunPgsModelsList(const char* bim_fname,
   if (!union_row) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
   SetAllU32Arr(bx.ct, union_row);
   for (uint32_t mi = 0; mi != model_ct; ++mi) {
-    if (keep_col[mi] == UINT32_MAX) continue;
-    const PgsModelResult* r = &results[mi];
-    for (uint32_t ii = 0; ii != r->ct; ++ii) {
-      const uint32_t bi = r->vars[ii].bim_idx;
-      if (bi != UINT32_MAX) union_row[bi] = 0;   // mark present
+    for (uint32_t ii = 0; ii != hit_ct[mi]; ++ii) {
+      union_row[hits[mi][ii].bim_idx] = 0;   // mark present
     }
   }
-  // Number the marked rows in .bim order, so the matrix comes out sorted
-  // by target position without a sort.
+  // Number the marked rows in .bim order, so the output comes out sorted by
+  // target position without a sort.
   for (uint32_t bi = 0; bi != bx.ct; ++bi) {
     if (union_row[bi] == 0) union_row[bi] = union_ct++;
     else union_row[bi] = UINT32_MAX;
   }
 
-  // ---- Step 5: fill the matrix.  Absent (model, variant) stays 0. ----
-  mat = (double*)calloc((size_t)union_ct * kept_ct, sizeof(double));
-  if (!mat) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
-  for (uint32_t mi = 0; mi != model_ct; ++mi) {
-    const uint32_t col = keep_col[mi];
-    if (col == UINT32_MAX) continue;
-    const PgsModelResult* r = &results[mi];
-    for (uint32_t ii = 0; ii != r->ct; ++ii) {
-      const uint32_t bi = r->vars[ii].bim_idx;
-      if (bi == UINT32_MAX) continue;
-      mat[(size_t)union_row[bi] * kept_ct + col] = r->vars[ii].out_beta;
-    }
-  }
+  // ---- Step 5: write.  Absent (model, variant) is 0. ----
+  //
+  // Written a row at a time by advancing one cursor per model through its
+  // bim_idx-sorted hits, rather than materialising a union_ct x kept_ct matrix.
+  // That matrix was the second scaling term: 249 models against an 8M-variant
+  // .bim would be 16 GB of doubles on its own.
+  cursor = (uint32_t*)calloc(model_ct, sizeof(uint32_t));
+  rowbuf = (double*)malloc(kept_ct * sizeof(double));
+  if (!cursor || !rowbuf) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
 
-  // ---- Step 6: write. ----
   memcpy(outname_end, ".matched", 9);
   matched_f = fopen(outname, "w");
   if (!matched_f) {
-    logerrprintfww("Error: --pgs-models-list: failed to create '%s': %s\n",
-                   outname, strerror(errno));
-    reterr = kPglRetOpenFail;
-    goto RunPgsModelsList_ret_1;
-  }
-  memcpy(outname_end, ".match_report", 14);
-  report_f = fopen(outname, "w");
-  if (!report_f) {
     logerrprintfww("Error: --pgs-models-list: failed to create '%s': %s\n",
                    outname, strerror(errno));
     reterr = kPglRetOpenFail;
@@ -1513,23 +1668,29 @@ PglErr RunPgsModelsList(const char* bim_fname,
   }
   fputc('\n', matched_f);
   for (uint32_t bi = 0; bi != bx.ct; ++bi) {
-    const uint32_t row = union_row[bi];
-    if (row == UINT32_MAX) continue;
+    if (union_row[bi] == UINT32_MAX) continue;
+    for (uint32_t cc = 0; cc != kept_ct; ++cc) rowbuf[cc] = 0.0;
+    for (uint32_t mi = 0; mi != model_ct; ++mi) {
+      const uint32_t col = keep_col[mi];
+      if (col == UINT32_MAX) continue;
+      // Monotone: bi only increases, and hits[mi] is sorted by bim_idx, so
+      // every hit is examined at most once across the whole write.
+      uint32_t* cp = &(cursor[mi]);
+      while ((*cp < hit_ct[mi]) && (hits[mi][*cp].bim_idx < bi)) ++(*cp);
+      if ((*cp < hit_ct[mi]) && (hits[mi][*cp].bim_idx == bi)) {
+        rowbuf[col] = hits[mi][*cp].out_beta;
+        ++(*cp);
+      }
+    }
     fprintf(matched_f, "%s\t%s", bx.entries[bi].varid, bx.entries[bi].a1);
     for (uint32_t cc = 0; cc != kept_ct; ++cc) {
-      fprintf(matched_f, "\t%.15g", mat[(size_t)row * kept_ct + cc]);
+      fprintf(matched_f, "\t%.15g", rowbuf[cc]);
     }
     fputc('\n', matched_f);
   }
 
-  fputs("#MODEL\tCHR\tPOS\tSRC_EFFECT\tSRC_OTHER\tSRC_BETA\tSTATUS\t"
-        "BIM_ID\tOUT_A1\tOUT_BETA\n", report_f);
-  for (uint32_t mi = 0; mi != model_ct; ++mi) {
-    WriteMatchReportRows(report_f, &results[mi], names[mi]);
-  }
-
-  fclose(matched_f); matched_f = nullptr;
   fclose(report_f);  report_f  = nullptr;
+  fclose(matched_f); matched_f = nullptr;
 
   *outname_end = '\0';
   logprintf("--pgs-models-list: %u model%s, %u variant%s in the union.\n",
@@ -1541,13 +1702,16 @@ PglErr RunPgsModelsList(const char* bim_fname,
  RunPgsModelsList_ret_1:
   if (matched_f) { fclose(matched_f); matched_f = nullptr; }
   if (report_f)  { fclose(report_f);  report_f  = nullptr; }
-  free(mat);
+  free(rowbuf);
+  free(cursor);
   free(union_row);
   free(keep_col);
-  if (results) {
-    for (uint32_t mi = 0; mi != result_ct; ++mi) PgsModelResultFree(&results[mi]);
-    free(results);
+  PgsModelResultFree(&res);
+  if (hits) {
+    for (uint32_t mi = 0; mi != hits_ct; ++mi) free(hits[mi]);
+    free(hits);
   }
+  free(hit_ct);
   if (paths) {
     for (uint32_t mi = 0; mi != model_ct; ++mi) free(paths[mi]);
     free(paths);
