@@ -1,5 +1,18 @@
 # Adjutant 🫡
 
+![status: beta](https://img.shields.io/badge/status-beta-orange)
+![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
+![platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![derived from PLINK 2](https://img.shields.io/badge/derived%20from-PLINK%202.0-informational)
+
+> [!WARNING]
+> **Beta.** Adjutant is under active development and issues may arise. The
+> `--score` engine is unmodified upstream code and its output is checked against
+> stock plink2 on every build, but the flags built on top of it are newer and
+> less exercised in the wild. Check your results, and please
+> [open an issue](https://github.com/faramer86/adjutant/issues) if something
+> looks wrong — a report with the command line and the log is enough to act on.
+
 Adjutant is a **PLINK 2**, but only with kept and extended functions for polygenic scores experiments. It aligns them to the provided reference, it computes them, it evaluates them (e.g. Incremental R2), you only need to give an order.
 
 One binary, no runtime dependencies, quick, easy, with `--score` output that is byte-identical
