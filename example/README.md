@@ -18,6 +18,7 @@ enough for the statistics to mean something.
 | `published_pgs.txt` | a "published" PGS whose alleles are deliberately mis-oriented |
 | `pgs_alpha.txt` / `pgs_beta.txt` | two overlapping models, for `--pgs-models-list` |
 | `models.txt` | the list file naming those two, one path per line |
+| `pgs_rsid.txt` | an rsID-keyed PGS whose positions are a different build |
 | `mhc.bed` / `.bim` / `.fam` | 24 variants straddling the MHC boundaries, for `--exclude-mhc-*` |
 | `mhc_weights.txt` | weights over all 24, for `--score` |
 | `mhc_pgs.txt` | the same variants keyed on chr/pos, for `--pgs-model` |
@@ -64,6 +65,12 @@ names the **opposite** effect allele, which is what makes the merge report
 source rows collapse to only 3 nonzero in both columns, because the rest are
 strand-ambiguous — a worked example of why a `0` in `.matched` needs
 `.match_report` to interpret.
+
+`pgs_rsid.txt` is keyed on rsID and its positions are deliberately shifted by
+1,000,000 — a stand-in for a weight file published against a different genome
+build. Matched on `chr:pos` it finds **0 of 40** variants; matched on ID it finds
+**40 of 40**. That contrast is the argument for `--pgs-model ... id`, shown
+rather than asserted.
 
 ## Provenance
 

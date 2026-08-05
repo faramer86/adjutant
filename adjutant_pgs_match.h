@@ -21,9 +21,10 @@ namespace plink2 {
 // -------------------------------------------------------------------
 // Status codes for a single source variant after harmonisation.
 //
-// kPgsMatchNoPos and kPgsMatchDuplicate are decided by the caller
-// (position lookup and dedup); they live in the enum but are NOT
-// returned by PgsMatchOne.
+// kPgsMatchNoPos, kPgsMatchDuplicate and kPgsMatchExcluded are decided
+// by the caller (key lookup, dedup, and the --exclude-*mhc-* flag on the
+// matched .bim row); they live in the enum but are NOT returned by
+// PgsMatchOne.
 //
 // kPgsMatchResolvedExact/Reversed are deliberately distinct from plain
 // Exact/Reversed: a palindrome resolved by comparing allele frequencies
@@ -41,7 +42,11 @@ typedef enum {
   kPgsMatchAmbiguousUnresolved,
   kPgsMatchNoPos,
   kPgsMatchNoAllele,
-  kPgsMatchDuplicate
+  kPgsMatchDuplicate,
+  // Matched a .bim row inside an --exclude-*mhc-* interval.  Distinct from
+  // NoPos so the report can say "you asked me to drop this" rather than
+  // "absent from your target".
+  kPgsMatchExcluded
 } PgsMatchStatus;
 
 // -------------------------------------------------------------------
@@ -145,6 +150,8 @@ PgsMatchStatus PgsMatchOne(const char* src_a0, const char* src_a1,
 // -------------------------------------------------------------------
 PglErr RunPgsModel(const char* bim_fname,
                    const char* pgs_model_fname,
+                   uint32_t match_by_id,
+                   uint32_t col_id,
                    uint32_t col_chr,
                    uint32_t col_pos,
                    uint32_t col_effect,
@@ -215,6 +222,8 @@ PglErr RunPgsModel(const char* bim_fname,
 // -------------------------------------------------------------------
 PglErr RunPgsModelsList(const char* bim_fname,
                         const char* list_fname,
+                        uint32_t match_by_id,
+                        uint32_t col_id,
                         uint32_t col_chr,
                         uint32_t col_pos,
                         uint32_t col_effect,

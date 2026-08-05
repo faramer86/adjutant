@@ -334,13 +334,20 @@ other allele and weight.
 --pgs-model: 26 matched (8 strand-flipped, 10 reversed), 0 unmatched on alleles.
 ```
 
-`harmonised.matched` feeds straight back into `--score`:
+`harmonised.matched` carries the **target's** identity — chromosome, position,
+both alleles — taken from the matched `.bim` row, so the file stands on its own:
 
-| ID | A1 | BETA |
-|---|---|---|
-| snp2 | A | 0.4 |
-| snp3 | T | 0.4 |
-| snp4 | C | -0.1 |
+| CHR | POS | ID | A1 | A2 | BETA |
+|---|---|---|---|---|---|
+| 1 | 2 | snp2 | A | G | 0.4 |
+| 1 | 3 | snp3 | T | C | 0.4 |
+| 1 | 4 | snp4 | C | T | -0.1 |
+
+It feeds straight back into `--score`, with `ID` in column 3 and `A1` in 4:
+
+```sh
+adjutant --bfile demo --score harmonised.matched 3 4 header-read --score-col-nums 6 --out result
+```
 
 `harmonised.match_report` keeps every variant, including the dropped ones:
 
@@ -353,6 +360,53 @@ other allele and weight.
 
 **Weights must be betas.** Negating an odds ratio is meaningless; adjutant warns
 if every weight is positive with mean in [0.5, 2.0].
+
+### Matching on rsID instead of position
+
+If the weight file and your target were built against **different genome
+builds**, matching on `chr:pos` finds nothing. A leading `id` joins on the
+variant ID instead:
+
+```sh
+adjutant --bim target.bim --pgs-model pgs_rsid.txt id 1 4 5 6 --out harmonised
+```
+
+The numbers are now the ID, effect allele, other allele and weight columns —
+four instead of five, since chromosome and position are no longer used.
+
+`example/pgs_rsid.txt` is exactly this case: an rsID-keyed PGS whose positions
+belong to another build.
+
+```
+--pgs-model: 40 source variants, 40 found in the .bim by ID.
+--pgs-model: 100.0% of source variants found in the .bim by ID.
+```
+
+The same file matched on position finds **nothing at all**:
+
+```
+--pgs-model: 40 source variants, 0 found in the .bim by position.
+```
+
+Everything else is unchanged — allele matching, beta negation, the report, and
+`--exclude-mhc-*` all behave identically, and `.matched` still carries the
+target's coordinates.
+
+> [!IMPORTANT]
+> **This trades a build problem for an rsID-versioning one.** Merged and retired
+> rsIDs mean a source and target built against different dbSNP releases can
+> silently fail to match, or match the *wrong* variant — and unlike a build
+> mismatch, that failure is invisible in the coordinates, because they never
+> enter the comparison.
+>
+> That is why the run prints the match rate. A join that found 12% is telling
+> you the two files disagree about what an rsID means; read it before you trust
+> the output.
+>
+> Rows with a `.` ID are skipped on both sides. Where the `.bim` repeats an ID
+> the first row wins, and every unreachable row is listed in
+> `<prefix>.duplicate_ids` — consider re-IDing both files as
+> `chr_pos_ref_alt`, which is unique by construction.
 
 ### Rescuing strand-ambiguous variants
 

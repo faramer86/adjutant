@@ -443,6 +443,8 @@ typedef struct Plink2CmdlineStruct {
   // and so does every --bim/--allow-ambiguous/--resolve-ambiguous guard.
   char* pgs_models_list_fname;
   char* pgs_pheno_pairs_fname;  // --pgs-pheno-pairs
+  uint32_t pgs_model_by_id;   // --pgs-model[s-list] id ...
+  uint32_t pgs_model_col_id;
   uint32_t pgs_model_col_chr;     // 1-based column indices
   uint32_t pgs_model_col_pos;
   uint32_t pgs_model_col_effect;
@@ -2711,9 +2713,16 @@ int main(int argc, char** argv) {
           // lists.  Only the destination filename differs.
           const uint32_t is_list =
             strequal_k_unsafe(flagname_p2, "gs-models-list");
-          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 6, 7))) {
+          // A leading literal 'id' selects ID matching, which takes one key
+          // column instead of chr+pos.  It cannot be mistaken for a column
+          // index, so the two forms never overlap.
+          const uint32_t by_id = (param_ct >= 2) &&
+            strequal_k(argvk[arg_idx + 2], "id", strlen(argvk[arg_idx + 2]));
+          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct,
+                                           by_id? 6 : 6, by_id? 7 : 7))) {
             goto main_ret_INVALID_CMDLINE_2A;
           }
+          pc.pgs_model_by_id = by_id;
           reterr = AllocFname(argvk[arg_idx + 1], flagname_p,
                               is_list ? &pc.pgs_models_list_fname
                                       : &pc.pgs_model_fname);
@@ -2722,10 +2731,10 @@ int main(int argc, char** argv) {
           }
           // Parse the 1-based column indices: five required, the sixth
           // (source effect-allele frequency) optional.
-          const uint32_t pgs_col_ct = param_ct - 1;
+          const uint32_t pgs_col_ct = param_ct - 1 - by_id;
           uint32_t pgs_cols[6];
           for (uint32_t pidx = 0; pidx < pgs_col_ct; ++pidx) {
-            const char* cur_modif = argvk[arg_idx + 2 + pidx];
+            const char* cur_modif = argvk[arg_idx + 2 + by_id + pidx];
             if (unlikely(ScanPosintCappedx(cur_modif, 65535, &pgs_cols[pidx]))) {
               snprintf(g_logbuf, kLogbufSize, "Error: Invalid --%s column index '%s' (must be a positive integer).\n", flagname_p, cur_modif);
               goto main_ret_INVALID_CMDLINE_WWA;
@@ -2740,13 +2749,23 @@ int main(int argc, char** argv) {
               }
             }
           }
-          pc.pgs_model_col_chr    = pgs_cols[0];
-          pc.pgs_model_col_pos    = pgs_cols[1];
-          pc.pgs_model_col_effect = pgs_cols[2];
-          pc.pgs_model_col_other  = pgs_cols[3];
-          pc.pgs_model_col_weight = pgs_cols[4];
-          if (pgs_col_ct == 6) {
-            pc.pgs_model_col_freq = pgs_cols[5];
+          if (by_id) {
+            pc.pgs_model_col_id     = pgs_cols[0];
+            pc.pgs_model_col_effect = pgs_cols[1];
+            pc.pgs_model_col_other  = pgs_cols[2];
+            pc.pgs_model_col_weight = pgs_cols[3];
+            if (pgs_col_ct == 5) {
+              pc.pgs_model_col_freq = pgs_cols[4];
+            }
+          } else {
+            pc.pgs_model_col_chr    = pgs_cols[0];
+            pc.pgs_model_col_pos    = pgs_cols[1];
+            pc.pgs_model_col_effect = pgs_cols[2];
+            pc.pgs_model_col_other  = pgs_cols[3];
+            pc.pgs_model_col_weight = pgs_cols[4];
+            if (pgs_col_ct == 6) {
+              pc.pgs_model_col_freq = pgs_cols[5];
+            }
           }
         } else {
           goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
@@ -3399,6 +3418,8 @@ int main(int argc, char** argv) {
     // target .bim.  No genotypes loaded.  Bypasses Plink2Core entirely.
     if (pc.pgs_model_fname) {
       reterr = RunPgsModel(pc.bim_fname, pc.pgs_model_fname,
+                           pc.pgs_model_by_id,
+                           pc.pgs_model_col_id,
                            pc.pgs_model_col_chr,
                            pc.pgs_model_col_pos,
                            pc.pgs_model_col_effect,
@@ -3418,6 +3439,8 @@ int main(int argc, char** argv) {
     // one matrix.
     if (pc.pgs_models_list_fname) {
       reterr = RunPgsModelsList(pc.bim_fname, pc.pgs_models_list_fname,
+                                pc.pgs_model_by_id,
+                                pc.pgs_model_col_id,
                                 pc.pgs_model_col_chr,
                                 pc.pgs_model_col_pos,
                                 pc.pgs_model_col_effect,
