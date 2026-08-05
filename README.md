@@ -133,6 +133,55 @@ variants' allele count, so partitions of different sizes stay comparable — and
 therefore do **not** sum to the total. Use `cols=+scoresums` if you need sums,
 which do.
 
+### Drop the MHC
+
+The MHC's long-range LD and extreme polymorphism make it behave unlike the rest
+of the genome, so PGS work often excludes it. Pick the flag matching **your
+data's build** — there is no auto-detection, and the wrong one silently drops
+the wrong window:
+
+| flag | region | chr6 interval |
+|---|---|---|
+| `--exclude-mhc-hg19` | MHC | 28,477,797 – 33,448,354 |
+| `--exclude-mhc-hg38` | MHC | 28,510,120 – 33,480,577 |
+| `--exclude-xmhc-hg19` | extended MHC | 25,726,291 – 33,368,421 |
+| `--exclude-xmhc-hg38` | extended MHC | 25,726,063 – 33,400,644 |
+
+Bounds are inclusive. At most one flag per run.
+
+```sh
+adjutant --bfile mhc --exclude-mhc-hg19 --score mhc_weights.txt 1 2 3 --out result
+```
+
+```
+--exclude-mhc-hg19: chr6:28477797-33448354, 10 variants excluded.
+--score: 14 variants processed.
+```
+
+Every run logs the interval it applied, so a log says which coordinates were
+used rather than leaving you to infer them from the flag name.
+
+The flags work the same way in harmonisation, where they apply to **both** the
+`.bim` and the weight file, so excluded variants are absent from the
+`.match_report` rather than reported as unmatched:
+
+```sh
+adjutant --bim mhc.bim --pgs-model mhc_pgs.txt 1 2 3 4 5 --exclude-xmhc-hg38 --out h
+```
+
+> [!IMPORTANT]
+> **The extended region does not contain the plain one.** The two come from
+> different published definitions: the GRC MHC region ends **79,933 bp past** the
+> xMHC end, in both builds. So `--exclude-xmhc-hg19` reaches 2.75 Mb further 5′
+> but stops short 3′, and can exclude **fewer** variants than
+> `--exclude-mhc-hg19` — on the `example/mhc` fileset it excludes 9 against 10.
+>
+> This is intrinsic to the source definitions, not a quirk of this tool; no
+> pairing of published MHC and xMHC coordinates nests. adjutant reports each
+> region exactly as published rather than silently widening one to fit the other.
+> If you want strictly everything, run the plain flag as well in a separate pass
+> and intersect the results.
+
 ---
 
 ## Evaluation

@@ -32,6 +32,7 @@
 #include "adjutant_help.h"
 #include "adjutant_matrix.h"
 #include "adjutant_matrix_calc.h"
+#include "adjutant_mhc.h"
 #include "adjutant_pgs_eval.h"
 #include "adjutant_pgs_match.h"
 #include "adjutant_psam.h"
@@ -327,6 +328,11 @@ typedef struct Plink2CmdlineStruct {
 
   Command1Flags command_flags1;
   PvarPsamFlags pvar_psam_flags;
+
+  // --exclude-mhc-hg19 / --exclude-xmhc-hg19 / --exclude-mhc-hg38 /
+  // --exclude-xmhc-hg38.  At most one; kMhcNone when none was given.
+  MhcRegion mhc_region;
+
   RangeList snps_range_list;
   RangeList exclude_snps_range_list;
   RangeList pheno_range_list;
@@ -563,6 +569,42 @@ uint32_t IsIntervalBedModifier(const char* modif, uint32_t slen) {
   return strequal_k(modif, "bed0", slen) || strequal_k(modif, "ibed0", slen) ||
          strequal_k(modif, "bed1", slen) || strequal_k(modif, "ibed1", slen) ||
          strequal_k(modif, "range", slen);
+}
+
+// Chromosome 6.  --chr-set/--autosome-num are not parsed, so the chromosome set
+// is always the human default and autosomes are coded by their own number.
+static const uint32_t kMhcChrIdx = 6;
+
+// Drop chromosome 6 variants inside the selected MHC interval.
+//
+// A linear scan, not a binary search over sorted positions.  --from-bp searched
+// and so had to reject an unsorted .pvar; walking one chromosome against a fixed
+// interval costs nothing worth reclaiming, and in exchange this imposes no
+// ordering requirement on the input at all.
+//
+// Composes with --extract/--exclude by construction: it only ever clears bits,
+// so whatever ran before it still holds.
+void ApplyMhcExclusion(MhcRegion region, const ChrInfo* cip, const uint32_t* variant_bps, uintptr_t* variant_include, uint32_t* variant_ct_ptr) {
+  if ((region == kMhcNone) || (!(*variant_ct_ptr))) {
+    return;
+  }
+  uint32_t removed_ct = 0;
+  for (uint32_t chr_fo_idx = 0; chr_fo_idx != cip->chr_ct; ++chr_fo_idx) {
+    if (cip->chr_file_order[chr_fo_idx] != kMhcChrIdx) {
+      continue;
+    }
+    const uint32_t vidx_end = cip->chr_fo_vidx_start[chr_fo_idx + 1];
+    for (uint32_t vidx = cip->chr_fo_vidx_start[chr_fo_idx]; vidx != vidx_end; ++vidx) {
+      if (IsSet(variant_include, vidx) && MhcExcludesBp(region, variant_bps[vidx])) {
+        ClearBit(vidx, variant_include);
+        ++removed_ct;
+      }
+    }
+  }
+  *variant_ct_ptr -= removed_ct;
+  // Print the interval, not just the count, so a log says which coordinates the
+  // run actually used rather than leaving the reader to trust the build flag.
+  logprintf("%s: chr%u:%u-%u, %u variant%s excluded.\n", MhcFlagName(region), kMhcChrIdx, MhcStartBp(region), MhcEndBp(region), removed_ct, (removed_ct == 1)? "" : "s");
 }
 
 void UpdateSampleSubsets(const uintptr_t* sample_include, uint32_t raw_sample_ct, uint32_t sample_ct, uintptr_t* founder_info, uint32_t* founder_ct_ptr, uintptr_t* sex_nm, uintptr_t* sex_male, uint32_t* male_ct_ptr, uint32_t* nosex_ct_ptr) {
@@ -1196,6 +1238,12 @@ PglErr Plink2Core(const Plink2Cmdline* pcp, MakePlink2Flags make_plink2_flags, c
       // more convenient than forcing users to generate full-blown sites-only
       // VCF files, etc.
     }
+
+    // After the ID-based filters, so the count in the log is what the MHC
+    // exclusion actually removed rather than what it would have removed from
+    // the unfiltered file.
+    ApplyMhcExclusion(pcp->mhc_region, cip, variant_bps, variant_include, &variant_ct);
+
     // variant_ids[] is fixed from this point on.
     const char* const* variant_ids = TO_CONSTCPCONSTP(variant_ids_mutable);
 
@@ -2248,6 +2296,7 @@ int main(int argc, char** argv) {
     pc.splitpar_bound1 = 0;
     pc.splitpar_bound2 = 0;
     pc.missing_pheno = -9;
+    pc.mhc_region = kMhcNone;
     pc.window_bp = -1;
     pc.xchr_model = 2;
     pc.keep_col_match_num = 0;
@@ -2423,7 +2472,36 @@ int main(int argc, char** argv) {
           }
           pc.filter_flags |= kfFilterPvarReq;
         } else {
-          goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
+          // The four MHC exclusions share a shape, so match them off a table
+          // rather than as four near-identical branches.
+          const char* const mhc_suffixes[] = {
+            "xclude-mhc-hg19", "xclude-xmhc-hg19",
+            "xclude-mhc-hg38", "xclude-xmhc-hg38"
+          };
+          const MhcRegion mhc_regions[] = {
+            kMhcHg19, kMhcXHg19, kMhcHg38, kMhcXHg38
+          };
+          uint32_t mhc_idx = 4;
+          for (uint32_t uii = 0; uii != 4; ++uii) {
+            if (!strcmp(flagname_p2, mhc_suffixes[uii])) {
+              mhc_idx = uii;
+              break;
+            }
+          }
+          if (unlikely(mhc_idx == 4)) {
+            goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
+          }
+          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 0, 0))) {
+            goto main_ret_INVALID_CMDLINE_2A;
+          }
+          // Two of these together is always a mistake: same build is redundant
+          // (xMHC contains MHC), different builds is a contradiction.
+          if (unlikely(pc.mhc_region != kMhcNone)) {
+            snprintf(g_logbuf, kLogbufSize, "Error: %s cannot be used with %s.\n", MhcFlagName(mhc_regions[mhc_idx]), MhcFlagName(pc.mhc_region));
+            goto main_ret_INVALID_CMDLINE_WWA;
+          }
+          pc.mhc_region = mhc_regions[mhc_idx];
+          pc.filter_flags |= kfFilterPvarReq;
         }
         break;
 
@@ -3084,6 +3162,13 @@ int main(int argc, char** argv) {
         logerrputs("Error: --sscore requires --pheno (there is no .psam to fall back on).\n");
         goto main_ret_INVALID_CMDLINE_A;
       }
+      // --sscore consumes a score matrix that is already computed; there are no
+      // variants left to exclude, so accepting the flag would silently do
+      // nothing.
+      if (unlikely(pc.mhc_region != kMhcNone)) {
+        snprintf(g_logbuf, kLogbufSize, "Error: %s cannot be used with --sscore, which reads scores that have already been computed.\n", MhcFlagName(pc.mhc_region));
+        goto main_ret_INVALID_CMDLINE_WWA;
+      }
     }
     if ((pc.score_info.flags & (kfScoreGiveBestPgs | kfScoreGiveCorrMatrix)) && (!pc.score_info.input_fname) && (!pc.sscore_fname)) {
       logerrprintf("Error: %s must be used with --score or --sscore.\n",
@@ -3324,6 +3409,7 @@ int main(int argc, char** argv) {
                            pc.pgs_model_resolve_ambig,
                            pc.pgs_model_maf_threshold,
                            pc.read_freq_fname,
+                           pc.mhc_region,
                            outname, outname_end);
       goto main_ret_1;
     }
@@ -3342,6 +3428,7 @@ int main(int argc, char** argv) {
                                 pc.pgs_model_resolve_ambig,
                                 pc.pgs_model_maf_threshold,
                                 pc.read_freq_fname,
+                                pc.mhc_region,
                                 outname, outname_end);
       goto main_ret_1;
     }

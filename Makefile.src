@@ -85,6 +85,7 @@ CCSRC = $(PLINK2LIB_CCSRC) \
         adjutant_help.cc \
         adjutant_matrix.cc \
         adjutant_matrix_calc.cc \
+        adjutant_mhc.cc \
         adjutant_pgs_eval.cc \
         adjutant_pgs_match.cc \
         adjutant_psam.cc \

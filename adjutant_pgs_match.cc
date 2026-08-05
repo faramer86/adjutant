@@ -194,6 +194,26 @@ static const char* NormChr(const char* s) {
   return buf;
 }
 
+// True when this chr/pos text pair falls inside the excluded MHC interval.
+//
+// This route has text tokens rather than a ChrInfo, so it establishes "is
+// chromosome 6" by normalised name; the interval itself comes from the one
+// shared table in adjutant_mhc.cc, same as the scoring route.
+//
+// An unparseable position is not excluded.  Deciding it is malformed is the
+// matcher's job, not this predicate's, and it already reports such a row as
+// kPgsMatchNoPos -- silently swallowing it here would hide a broken input
+// behind a flag the user set for an unrelated reason.
+static uint32_t MhcExcludesChrPos(MhcRegion region, const char* chr,
+                                  const char* pos_str) {
+  if (region == kMhcNone) return 0;
+  const char* nchr = NormChr(chr);
+  if (!nchr || strcmp(nchr, "6")) return 0;
+  uint32_t bp;
+  if (ScanUintDefcap(pos_str, &bp)) return 0;
+  return MhcExcludesBp(region, bp);
+}
+
 // Build hash key "CHR\tPOS" into caller buffer.  Returns key length or 0.
 static uint32_t BuildChrPosKey(const char* chr, const char* pos_str,
                                 char* key_buf, uint32_t key_cap) {
@@ -564,6 +584,7 @@ typedef struct PgsBimIndexStruct {
   uint32_t*    htable;
   uint32_t     htsize;
   FlatStrStore keys;
+  uint32_t     mhc_excluded_ct;  // .bim rows dropped by --exclude-*mhc-*
 } PgsBimIndex;
 
 static void PgsBimIndexPreinit(PgsBimIndex* bx) {
@@ -571,6 +592,7 @@ static void PgsBimIndexPreinit(PgsBimIndex* bx) {
   bx->ct      = 0;
   bx->htable  = nullptr;
   bx->htsize  = 0;
+  bx->mhc_excluded_ct = 0;
   bx->keys    = {nullptr, 0, 0, nullptr, 0, 0};
 }
 
@@ -591,7 +613,7 @@ static void PgsBimIndexFree(PgsBimIndex* bx) {
 
 // Read the .bim (CHR ID CM POS A1 A2, no header) and build the
 // (chr \t pos) -> row hash table.
-static PglErr LoadBimIndex(const char* bim_fname, PgsBimIndex* bx) {
+static PglErr LoadBimIndex(const char* bim_fname, MhcRegion mhc_region, PgsBimIndex* bx) {
   PglErr reterr = kPglRetSuccess;
   uint32_t bim_cap = 65536;
 
@@ -641,6 +663,12 @@ static PglErr LoadBimIndex(const char* bim_fname, PgsBimIndex* bx) {
 
     uint32_t key_len = BuildChrPosKey(chr_tok, pos_tok, key_buf, sizeof(key_buf));
     if (!key_len) continue;
+
+    // Never indexed, so nothing can match to it.
+    if (MhcExcludesChrPos(mhc_region, chr_tok, pos_tok)) {
+      ++bx->mhc_excluded_ct;
+      continue;
+    }
 
     if (bx->ct == bim_cap) {
       bim_cap *= 2;
@@ -710,6 +738,7 @@ typedef struct PgsModelStatsStruct {
   uint32_t n_unresolved;
   uint32_t n_afreq_id_hit;
   uint32_t n_duplicate;
+  uint32_t n_mhc_excluded;  // source rows dropped by --exclude-*mhc-*
 } PgsModelStats;
 
 typedef struct PgsModelResultStruct {
@@ -755,6 +784,7 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                              uint32_t resolve_ambig,
                              double maf_threshold,
                              const AfreqTable* afreq_tab,
+                             MhcRegion mhc_region,
                              const char* flag,
                              const char* label,
                              PgsModelResult* out) {
@@ -817,6 +847,14 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
       uint32_t pos_slen = (uint32_t)(CurTokenEnd(col_ptrs[1]) - col_ptrs[1]);
       if (pos_slen > 31) pos_slen = 31;
       memcpy(pos_tok, col_ptrs[1], pos_slen); pos_tok[pos_slen] = '\0';
+
+      // Dropped here rather than left to fail lookup, so the .match_report says
+      // "excluded" by omission instead of reporting NO_MATCH -- which would read
+      // as "absent from your target" for a variant the user asked to drop.
+      if (MhcExcludesChrPos(mhc_region, chr_tok, pos_tok)) {
+        ++out->stats.n_mhc_excluded;
+        continue;
+      }
 
       uint32_t eff_slen = (uint32_t)(CurTokenEnd(col_ptrs[2]) - col_ptrs[2]);
       uint32_t oth_slen = (uint32_t)(CurTokenEnd(col_ptrs[3]) - col_ptrs[3]);
@@ -1063,6 +1101,12 @@ static void LogModelSummary(const char* label, const PgsModelResult* r,
   const PgsModelStats* st = &r->stats;
   logprintf("%s: %u source variant%s, %u found in the .bim by position.\n",
             label, r->ct, r->ct == 1 ? "" : "s", st->n_found_pos);
+  // Stated separately from r->ct: these rows never became source variants, so
+  // they are absent from the .match_report rather than reported as NO_MATCH.
+  if (st->n_mhc_excluded) {
+    logprintf("%s: %u source variant%s excluded as MHC before matching.\n",
+              label, st->n_mhc_excluded, st->n_mhc_excluded == 1 ? "" : "s");
+  }
   if (!allow_ambiguous && st->n_ambiguous) {
     logprintf("%s: %u ambiguous (A/T, C/G) dropped; "
               "use --allow-ambiguous to keep them.\n", label, st->n_ambiguous);
@@ -1107,6 +1151,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t resolve_ambig,
                    double maf_threshold,
                    const char* read_freq_fname,
+                   MhcRegion mhc_region,
                    char* outname,
                    char* outname_end) {
   PglErr reterr = kPglRetSuccess;
@@ -1121,10 +1166,16 @@ PglErr RunPgsModel(const char* bim_fname,
   FILE* matched_f = nullptr;
   FILE* report_f  = nullptr;
 
-  reterr = LoadBimIndex(bim_fname, &bx);
+  reterr = LoadBimIndex(bim_fname, mhc_region, &bx);
   if (unlikely(reterr)) goto RunPgsModel_ret_1;
   logprintf("--pgs-model: %u variant%s loaded from %s.\n",
             bx.ct, bx.ct == 1 ? "" : "s", bim_fname);
+  if (mhc_region != kMhcNone) {
+    logprintf("%s: chr6:%u-%u, %u .bim variant%s excluded.\n",
+              MhcFlagName(mhc_region), MhcStartBp(mhc_region),
+              MhcEndBp(mhc_region), bx.mhc_excluded_ct,
+              bx.mhc_excluded_ct == 1 ? "" : "s");
+  }
 
   // Target allele frequencies, only when --resolve-ambiguous asked for them.
   // The CLI has already refused --resolve-ambiguous without --read-freq, so
@@ -1137,7 +1188,7 @@ PglErr RunPgsModel(const char* bim_fname,
   reterr = HarmoniseModel(&bx, pgs_model_fname,
                           col_chr, col_pos, col_effect, col_other,
                           col_weight, col_freq, allow_ambiguous,
-                          resolve_ambig, maf_threshold, &afreq_tab,
+                          resolve_ambig, maf_threshold, &afreq_tab, mhc_region,
                           "--pgs-model", pgs_model_fname, &res);
   if (unlikely(reterr)) goto RunPgsModel_ret_1;
 
@@ -1221,6 +1272,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t resolve_ambig,
                         double maf_threshold,
                         const char* read_freq_fname,
+                        MhcRegion mhc_region,
                         char* outname,
                         char* outname_end) {
   PglErr reterr = kPglRetSuccess;
@@ -1346,10 +1398,16 @@ PglErr RunPgsModelsList(const char* bim_fname,
   }
 
   // ---- Step 2: the target, read once for every model. ----
-  reterr = LoadBimIndex(bim_fname, &bx);
+  reterr = LoadBimIndex(bim_fname, mhc_region, &bx);
   if (unlikely(reterr)) goto RunPgsModelsList_ret_1;
   logprintf("--pgs-models-list: %u variant%s loaded from %s.\n",
             bx.ct, bx.ct == 1 ? "" : "s", bim_fname);
+  if (mhc_region != kMhcNone) {
+    logprintf("%s: chr6:%u-%u, %u .bim variant%s excluded.\n",
+              MhcFlagName(mhc_region), MhcStartBp(mhc_region),
+              MhcEndBp(mhc_region), bx.mhc_excluded_ct,
+              bx.mhc_excluded_ct == 1 ? "" : "s");
+  }
 
   if (resolve_ambig) {
     reterr = ReadAfreqTable(read_freq_fname, &afreq_tab);
@@ -1369,7 +1427,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
     reterr = HarmoniseModel(&bx, paths[mi],
                             col_chr, col_pos, col_effect, col_other,
                             col_weight, col_freq, allow_ambiguous,
-                            resolve_ambig, maf_threshold, &afreq_tab,
+                            resolve_ambig, maf_threshold, &afreq_tab, mhc_region,
                             "--pgs-models-list", prog_label, &results[mi]);
     if (unlikely(reterr)) goto RunPgsModelsList_ret_1;
     const PgsModelStats* st = &results[mi].stats;

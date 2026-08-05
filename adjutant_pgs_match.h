@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 
+#include "adjutant_mhc.h"
 #include "include/plink2_base.h"
 
 #ifdef __cplusplus
@@ -154,6 +155,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t resolve_ambig,
                    double maf_threshold,
                    const char* read_freq_fname,
+                   MhcRegion mhc_region,
                    char* outname,
                    char* outname_end);
 
@@ -205,6 +207,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t resolve_ambig,
                         double maf_threshold,
                         const char* read_freq_fname,
+                        MhcRegion mhc_region,
                         char* outname,
                         char* outname_end);
 

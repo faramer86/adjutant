@@ -16,6 +16,32 @@ enough for the statistics to mean something.
 | `pairs.txt` | phenotype/PGS pairs, for `--pgs-pheno-pairs` |
 | `target.bim` | a harmonisation target |
 | `published_pgs.txt` | a "published" PGS whose alleles are deliberately mis-oriented |
+| `mhc.bed` / `.bim` / `.fam` | 24 variants straddling the MHC boundaries, for `--exclude-mhc-*` |
+| `mhc_weights.txt` | weights over all 24, for `--score` |
+| `mhc_pgs.txt` | the same variants keyed on chr/pos, for `--pgs-model` |
+
+## The MHC fileset is positioned, not random
+
+`demo` is entirely chromosome 1 at positions 0–39, so the `--exclude-mhc-*`
+flags remove nothing from it. `mhc.*` exists to exercise them: 200 samples and
+24 variants placed *exactly* on the interval edges — one at each `start` and
+`end`, one at each `start-1` and `end+1`, for all four regions — plus a
+chromosome 7 variant at an MHC position, so a filter that forgot to check the
+chromosome fails visibly.
+
+| flag | excludes |
+|---|---|
+| `--exclude-mhc-hg19` | 10 |
+| `--exclude-mhc-hg38` | 10 |
+| `--exclude-xmhc-hg19` | 9 |
+| `--exclude-xmhc-hg38` | 13 |
+
+The two `mhc` builds excluding the same **count** while disagreeing about four
+variants is deliberate: it means a test comparing only counts would pass with
+the hg19 and hg38 coordinates swapped.
+
+Four of the alleles are A/T or C/G, so a `--pgs-model` run against this fileset
+also exercises the ambiguous-variant path rather than matching cleanly.
 
 ## It is not random noise
 
@@ -37,6 +63,10 @@ The genotypes are simulated, not real people:
 plink2 --dummy 300 40 acgt --make-pgen --seed 20260803 --out demo
 plink2 --pfile demo --make-bed --out demo
 plink2 --pfile demo --freq   --out demo
+
+plink2 --dummy 200 24 acgt --make-bed --seed 20260805 --out mhc
+# mhc.bim is then rewritten with the chosen chromosomes, positions and IDs;
+# the .bed holds genotype codes indexed by row, so relabelling rows is valid.
 ```
 
 Everything else is derived from those genotypes deterministically — the "noise"

@@ -122,6 +122,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  input       --pfile --bfile --sscore\n"
 "  scoring     --score --score-col-nums --score-partitions --read-freq\n"
 "  filters     --keep --remove --extract --exclude\n"
+"              --exclude-mhc-hg19/hg38 --exclude-xmhc-hg19/hg38\n"
 "  phenotype   --pheno --pheno-name --pheno-col-nums --covar --covar-name\n"
 "  evaluation  --give-best-pgs --give-corr-matrix --pgs-pheno-pairs\n"
 "              --prevalence --folds\n"
@@ -224,6 +225,18 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "                            an IID-only list matches nothing.\n"
 "  --extract <f...> / --exclude <f...>\n"
 "                            Keep / drop variants, by ID.\n"
+"  --exclude-mhc-hg19 / --exclude-mhc-hg38\n"
+"                            Drop chr6 MHC.  hg19 28477797-33448354,\n"
+"                            hg38 28510120-33480577.  Inclusive.\n"
+"  --exclude-xmhc-hg19 / --exclude-xmhc-hg38\n"
+"                            Drop the extended MHC.  hg19 25726291-33368421,\n"
+"                            hg38 25726063-33400644.\n"
+"                            NOT a superset of --exclude-mhc-*: it reaches\n"
+"                            further 5' but stops ~80kb short 3', so it can\n"
+"                            drop fewer variants.  The two regions come from\n"
+"                            different published definitions.\n"
+"                            One region flag per run; not valid with --sscore.\n"
+"                            Applies to --score and to --bim/--pgs-model.\n"
                );
 
     if (!param_ct) {
