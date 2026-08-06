@@ -80,27 +80,27 @@ See [example/README.md](example/README.md) for how they were made.
 
 **[I. Scoring](#i-scoring)** — genotypes + weights → `.sscore`
 
-- **[One model](#1-one-model)** — apply a single weight file
-- **[Several at once](#2-several-models-in-one-pass)** — one pass, one column per model (`--score-col-nums`)
-- **[Variant subsets](#3-split-a-model-into-partitions)** — score any 0/1 mask separately (`--score-partitions`)
-- **[Drop the MHC](#4-drop-the-mhc)** — exclude chr6 MHC by build (`--exclude-mhc-*`)
+- **[One model](#1-one-model)** — Apply a single weight file to a genotype fileset.
+- **[Several at once](#2-several-models-in-one-pass)** — Score any number of weight columns in a single pass, one output column per model (`--score-col-nums`).
+- **[Variant subsets](#3-split-a-model-into-partitions)** — Score chosen subsets of variants separately, alongside the unpartitioned total (`--score-partitions`).
+- **[Drop the MHC](#4-drop-the-mhc)** — Exclude the chromosome 6 MHC region, using coordinates matched to your genome build (`--exclude-mhc-*`).
 
 **[II. Evaluation](#ii-evaluation)** — scores + a phenotype → `.best_pgs`, `.pgs_corr`
 
-- **[Rank models](#1-rank-models-against-a-trait)** — incremental R² over a covariates-only null (`--give-best-pgs`)
-- **[Case/control traits](#2-casecontrol-traits)** — OR, AUC, liability R² (`--prevalence`)
-- **[Cross-validate](#3-cross-validate-the-ranking)** — so the winner isn't just the luckiest (`--folds`)
-- **[Correlate models](#4-correlation-matrix)** — Pearson matrix across scores (`--give-corr-matrix`)
-- **[Chosen pairs only](#5-evaluate-only-certain-pairs)** — skip the full cross-product (`--pgs-pheno-pairs`)
-- **[One PGS, every trait](#6-evaluate-single-pgs-against-all-of-the-phenotypes)** — just omit `--pheno-name`
-- **[Reuse a score matrix](#7-use-a-score-matrix-you-already-have)** — no genotypes needed (`--sscore`)
+- **[Rank models](#1-rank-models-against-a-trait)** — Rank candidate scores by the R² each adds to a covariates-only null model (`--give-best-pgs`).
+- **[Case/control traits](#2-casecontrol-traits)** — Binary phenotypes are detected automatically and reported with odds ratios and AUC; `--prevalence` adds liability-scale R².
+- **[Cross-validate](#3-cross-validate-the-ranking)** — Estimate performance by k-fold cross-validation, which corrects the optimism of selecting the best of many candidates (`--folds`).
+- **[Correlate models](#4-correlation-matrix)** — Compute a Pearson correlation matrix across the scored models (`--give-corr-matrix`).
+- **[Chosen pairs only](#5-evaluate-only-certain-pairs)** — Restrict evaluation to named (phenotype, model) pairs instead of the full cross-product (`--pgs-pheno-pairs`).
+- **[One PGS, every trait](#6-evaluate-single-pgs-against-all-of-the-phenotypes)** — Evaluate a score against every phenotype in the file by omitting `--pheno-name`.
+- **[Reuse a score matrix](#7-use-a-score-matrix-you-already-have)** — Evaluate scores computed earlier, without reading genotypes again (`--sscore`).
 
 **[III. Harmonisation](#iii-harmonisation)** — weights + a `.bim` → `.matched`
 
-- **[Align a published PGS](#1-align-a-published-pgs-to-your-target-bim)** — match on chr:pos, flip and negate as needed (`--pgs-model`)
-- **[Match on rsID](#2-matching-on-rsid-instead-of-position)** — survives a build mismatch (the `id` keyword)
-- **[Rescue palindromes](#3-rescuing-strand-ambiguous-variants)** — decide A/T and C/G by frequency (`--resolve-ambiguous`)
-- **[Merge many models](#4-merging-several-models)** — one matrix, one column per model (`--pgs-models-list`)
+- **[Align a published PGS](#1-align-a-published-pgs-to-your-target-bim)** — Match a weight file to your target by position, flipping strand and negating effect sizes where required (`--pgs-model`).
+- **[Match on rsID](#2-matching-on-rsid-instead-of-position)** — Join on variant ID rather than position, so a difference in genome build does not prevent matching (the `id` keyword).
+- **[Rescue palindromes](#3-rescuing-strand-ambiguous-variants)** — Resolve strand-ambiguous A/T and C/G variants by comparing allele frequencies (`--resolve-ambiguous`).
+- **[Merge many models](#4-merging-several-models)** — Harmonise several models against one target and merge them into a single matrix (`--pgs-models-list`).
 
 ---
 
