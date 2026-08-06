@@ -49,10 +49,23 @@ make release          # -> bin/adjutant
 Needs a C++17 compiler, zlib, and a BLAS/LAPACK (Accelerate on macOS, OpenBLAS
 elsewhere). Everything else is vendored.
 
-Pre-built macOS arm64 and Linux x86-64 binaries — including a fully static one
-needing no glibc — are attached to the GitHub release:
-1) Linux (86): link
-2) MacOS: link
+Or take a pre-built binary. Neither needs anything installed:
+
+| platform | download |
+|---|---|
+| Linux x86-64 | [`adjutant-linux-x86_64-static`](https://github.com/faramer86/adjutant/releases/latest/download/adjutant-linux-x86_64-static) |
+| macOS Apple Silicon | [`adjutant-macos-arm64`](https://github.com/faramer86/adjutant/releases/latest/download/adjutant-macos-arm64) |
+
+```sh
+curl -LO https://github.com/faramer86/adjutant/releases/latest/download/adjutant-linux-x86_64-static
+chmod +x adjutant-linux-x86_64-static
+./adjutant-linux-x86_64-static --version
+```
+
+The Linux build is fully static — it runs on anything x86-64, including images
+with no glibc. The macOS build links only frameworks that ship with the OS.
+Checksums are in [`SHA256SUMS`](https://github.com/faramer86/adjutant/releases/latest/download/SHA256SUMS)
+on the same release.
 
 ---
 
