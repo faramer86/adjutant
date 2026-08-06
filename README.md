@@ -111,7 +111,22 @@ Copy any as a template for your own data — see
 adjutant --bfile demo --score weights.txt 1 2 header-read --out result
 ```
 
-`1 2` are the columns holding the variant ID and the effect allele;
+The numbers are **column positions in the weight file**: variant ID, effect
+allele, weight. Each defaults to the one after the last, so `1 2` means `1 2 3`
+— the weight column is chosen for you.
+
+```
+--score <file> <id> <effect allele> <weight>
+```
+
+Any of them can sit anywhere — name all three when your file is laid out
+differently. `weights.txt` holds `PGS_C` in column 5, so this scores that model
+instead:
+
+```sh
+adjutant --bfile demo --score weights.txt 1 2 5 header-read --out result
+```
+
 `header-read` takes score names from the first line.
 
 ### Several models in one pass
