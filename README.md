@@ -236,18 +236,22 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 3-5 \
 
 `result.best_pgs`, sorted by `R2_INCR`:
 
-| PGS_ID | PHENO | TYPE | N | BETA | SE | P | R2_INCR | R2_INCR_L95 | R2_INCR_U95 |
-|---|---|---|---|---|---|---|---|---|---|
-| PGS_B | HEIGHT | QT | 300 | 1.04992 | 0.133779 | 7.77e-14 | 0.171924 | 0.099872 | 0.254388 |
-| PGS_C | HEIGHT | QT | 300 | 0.0495218 | 0.147079 | 0.736581 | 0.000382137 | 0 | 0.0176273 |
-| PGS_A | HEIGHT | QT | 300 | 0.00247 | 0.147029 | 0.986608 | 9.51667e-07 | 0 | 0.0131051 |
+| PGS_ID | PHENO | TYPE | N | BETA | SE | P | R2_NULL | R2_FULL | R2_INCR | R2_INCR_L95 | R2_INCR_U95 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| PGS_B | HEIGHT | QT | 300 | 1.04992 | 0.133779 | 7.77127e-14 | 0.00186797 | 0.173792 | 0.171924 | 0.099872 | 0.254388 |
+| PGS_C | HEIGHT | QT | 300 | 0.0495218 | 0.147079 | 0.736581 | 0.00186797 | 0.00225011 | 0.000382137 | 0 | 0.0176273 |
+| PGS_A | HEIGHT | QT | 300 | 0.00247 | 0.147029 | 0.986608 | 0.00186797 | 0.00186892 | 9.51667e-07 | 0 | 0.0131051 |
 
 PGS_B is the model `HEIGHT` was built from, and it wins. The two noise models
 get an `R2_INCR_L95` of exactly **0** — their interval contains zero. Read the
 interval before the ranking.
 
 `BETA` is per standard deviation of the score. Two models are fitted per row:
-phenotype on covariates alone, then with the score added.
+phenotype on covariates alone (`R2_NULL`), then with the score added
+(`R2_FULL`). `R2_INCR` is the difference, which is what the ranking sorts on —
+`0.173792 − 0.00186797 = 0.171924`. `R2_NULL` is identical down the column
+because the null model does not involve the score; it moves only when the
+phenotype or the covariates change.
 
 ### Case/control traits
 
