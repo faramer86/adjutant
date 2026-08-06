@@ -25,16 +25,6 @@ It is quick, easy, with `--score` output byte-identical to stock PLINK 2.
 
 ---
 
-## Three modes
-
-| | Input | Output | Flags |
-|---|---|---|---|
-| **Score** | genotypes + weights | `.sscore` | `--score` |
-| **Evaluate** | scores + a phenotype + covariates | `.best_pgs`, `.pgs_corr` | `--give-best-pgs`, `--give-corr-matrix` |
-| **Harmonise** | weight(s) + a `.bim` | `.matched` | `--pgs-model`, `--pgs-models-list` |
-
----
-
 ## Build
 
 ```sh
@@ -83,6 +73,34 @@ cd example
 | `demo.afreq` | `--read-freq` | allele frequencies |
 
 See [example/README.md](example/README.md) for how they were made.
+
+---
+
+## What it can do
+
+**[I. Scoring](#i-scoring)** — genotypes + weights → `.sscore`
+
+- **[One model](#1-one-model)** — apply a single weight file
+- **[Several at once](#2-several-models-in-one-pass)** — one pass, one column per model (`--score-col-nums`)
+- **[Variant subsets](#3-split-a-model-into-partitions)** — score any 0/1 mask separately (`--score-partitions`)
+- **[Drop the MHC](#4-drop-the-mhc)** — exclude chr6 MHC by build (`--exclude-mhc-*`)
+
+**[II. Evaluation](#ii-evaluation)** — scores + a phenotype → `.best_pgs`, `.pgs_corr`
+
+- **[Rank models](#1-rank-models-against-a-trait)** — incremental R² over a covariates-only null (`--give-best-pgs`)
+- **[Case/control traits](#2-casecontrol-traits)** — OR, AUC, liability R² (`--prevalence`)
+- **[Cross-validate](#3-cross-validate-the-ranking)** — so the winner isn't just the luckiest (`--folds`)
+- **[Correlate models](#4-correlation-matrix)** — Pearson matrix across scores (`--give-corr-matrix`)
+- **[Chosen pairs only](#5-evaluate-only-certain-pairs)** — skip the full cross-product (`--pgs-pheno-pairs`)
+- **[One PGS, every trait](#6-evaluate-single-pgs-against-all-of-the-phenotypes)** — just omit `--pheno-name`
+- **[Reuse a score matrix](#7-use-a-score-matrix-you-already-have)** — no genotypes needed (`--sscore`)
+
+**[III. Harmonisation](#iii-harmonisation)** — weights + a `.bim` → `.matched`
+
+- **[Align a published PGS](#1-align-a-published-pgs-to-your-target-bim)** — match on chr:pos, flip and negate as needed (`--pgs-model`)
+- **[Match on rsID](#2-matching-on-rsid-instead-of-position)** — survives a build mismatch (the `id` keyword)
+- **[Rescue palindromes](#3-rescuing-strand-ambiguous-variants)** — decide A/T and C/G by frequency (`--resolve-ambiguous`)
+- **[Merge many models](#4-merging-several-models)** — one matrix, one column per model (`--pgs-models-list`)
 
 ---
 
