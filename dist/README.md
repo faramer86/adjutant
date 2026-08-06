@@ -1,11 +1,13 @@
 # adjutant binaries
 
-**This directory holds no binaries between releases** — only this file, which is
-the record of how they are produced and what must be checked before any of them
-is published. Stale binaries that look current are worse than none: they carry
-an older output layout while the README documents the new one, and nothing about
-the file says so. They are therefore built fresh at release time, all targets
-from one commit, and deleted afterwards.
+**Built binaries live here.** This file records how they are produced and what
+must be checked before any is published.
+
+**Rebuild every target from the same commit, together.** A stale binary that
+looks current is worse than none — it writes an older output layout while the
+README documents the new one, and nothing about the file says which. `.matched`
+gained `CHR`/`POS`/`A2` columns after `dc4908a`, so a set assembled across that
+boundary would have one binary emitting a layout the others cannot read.
 
 Everything is compiled with `-O3 -DNDEBUG -ffp-contract=off -DZSTD_MULTITHREAD`.
 
@@ -18,19 +20,34 @@ Everything is compiled with `-O3 -DNDEBUG -ffp-contract=off -DZSTD_MULTITHREAD`.
 `-ffp-contract=off` is not optional. It stops the compiler fusing multiply-add
 in the scoring dot product, which is what keeps `-O3` bit-identical to `-O2`.
 
-Two targets are supported: **macOS Apple Silicon** and **Linux x86-64**. Earlier
-builds for macOS Intel, the universal binary and Linux aarch64 have been dropped.
+Two targets ship, both needing nothing installed:
 
 | file | platform | approx. size |
 |---|---|---|
 | `adjutant-macos-arm64` | macOS Apple Silicon | 1.3 MB |
-| `adjutant-linux-x86_64` | Linux x86-64, glibc ≥ 2.31 | 1.6 MB |
-| `adjutant-linux-x86_64-static` | Linux x86-64, **no dependencies** | 28 MB |
+| `adjutant-linux-x86_64-static` | Linux x86-64 | 28 MB |
 
-**Build every target from the same commit.** Mixing them is how a release ships
-binaries that disagree with each other: `.matched` gained `CHR`/`POS`/`A2`
-columns after `dc4908a`, so a set assembled across that boundary would have one
-binary writing a layout the others cannot read.
+Earlier builds for macOS Intel, the universal binary and Linux aarch64 have been
+dropped, as has the dynamically linked Linux build — the static one runs
+anywhere and needs no `libopenblas0`. Its recipe is still below if you want it.
+
+### "Static" means different things on the two platforms
+
+The Linux binary is genuinely `-static`: one file, no interpreter, verified in
+`busybox`, which carries no glibc at all.
+
+**A fully static macOS binary is not possible.** Apple ships no static
+`libSystem` and has not supported statically linked executables for two decades,
+so `-static` cannot link there. What the macOS build does instead is depend on
+**nothing outside the OS**:
+
+```
+Accelerate.framework   libSystem.B.dylib   libz.1.dylib   libc++.1.dylib
+```
+
+All four are present on every macOS. There is nothing to install, which is the
+property that matters for distribution — reached by a different route, and worth
+stating precisely rather than calling the result "static".
 
 ## What to verify before publishing
 
@@ -45,12 +62,10 @@ all, compared by checksum across platforms.
 
 - **macOS arm64** — all four suites green: 89/89 goldens byte-identical, the
   input matrix, every `pgs_eval_check` assertion, and the demo.
-- **Linux dynamic vs Linux static** — every output byte-identical. Measured at
-  `dc4908a`: 16 of 16.
 - **macOS vs Linux** — everything byte-identical except `--score` `.sscore`,
-  where a handful of near-zero cells differ; see below. Measured at `dc4908a`:
-  14 of 16 identical, `.best_pgs`, `.pgs_corr`, `.matched`, `.match_report` and
-  every MHC output among them.
+  where a handful of near-zero cells differ; see below. `.matched`,
+  `.match_report` (both key modes), the merged matrix and every MHC output all
+  agree exactly.
 
 A build verified only by `score_check.sh` has never executed `--give-best-pgs`,
 `--give-corr-matrix`, `--pgs-pheno-pairs`, `--score-partitions` or the MHC
@@ -64,33 +79,30 @@ goldens were generated with. It does not hold bit-for-bit on Linux, which uses
 gcc and OpenBLAS rather than clang and Accelerate.
 
 The disagreement is confined to cells whose value is **itself numerically zero**.
-Measured across 300 samples: the largest difference anywhere is **8.33e-18**, and
-the largest value involved in any differing cell is **5.55e-18**. Those are
+Re-measured at every release: on the partitioned `.sscore`, **2 of 900 cells**
+differ, by at most **8.33e-18**, and the largest value involved in any differing
+cell is **5.55e-18**. Those are
 columns where the score cancels and only rounding residue survives. Every
 meaningful digit of every other field matches, and the difference is unchanged
 from the previously shipped Linux build — it is a property of the toolchain, not
 of any code change.
 
-## Linux runtime requirements
+## Runtime requirements
 
-`adjutant-linux-x86_64` is dynamically linked against OpenBLAS. One package is
-enough — `libopenblas0` pulls in `libgfortran5`:
+Neither binary needs anything installed.
 
-```sh
-apt-get install libopenblas0        # Debian/Ubuntu
-```
+`adjutant-linux-x86_64-static` is verified by running it in `busybox`, which
+carries no glibc whatsoever. That costs size — 28 MB against about 1.6 MB for a
+dynamic build — and the bulk is OpenBLAS's per-CPU kernels, not debug info:
+`strip --strip-unneeded` recovers only about 1 MB, so it is left unstripped.
 
-Verified by running it in a bare `debian:bullseye`: without the package it fails
-with `libopenblas.so.0: cannot open shared object file`; with it alone it starts
-and reports its version.
+`adjutant-macos-arm64` links only `Accelerate.framework`, `libSystem.B.dylib`,
+`libz.1.dylib` and `libc++.1.dylib`, all shipped with the OS. Check with
+`otool -L`; anything outside `/System` or `/usr/lib` means the build picked up a
+Homebrew library and will not run on a machine without it.
 
-`adjutant-linux-x86_64-static` needs nothing at all — verified by running it in
-`busybox`, which carries no glibc whatsoever. It costs size: 27.8 MB against
-1.62 MB. That is OpenBLAS's per-CPU kernels, not debug info — `strip
---strip-unneeded` recovers only about 1 MB, so this build is left unstripped.
-
-Built on Debian bullseye (glibc 2.31, 2020) so the binaries run on older
-long-lived cluster images.
+The Linux binary is built on Debian bullseye (glibc 2.31, 2020) so it runs on
+older long-lived cluster images.
 
 ## Notable changes to check against
 
