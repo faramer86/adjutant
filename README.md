@@ -456,17 +456,22 @@ refused rather than guessed. Column 6 is the source effect-allele frequency.
 target and merges them into one matrix — one column per model, one row per
 variant matched by at least one of them.
 
-Give it a text file listing the weight files, one per line:
+Give it a text file listing the weight files, one per line. **Absolute paths
+are the safe choice** — a relative path resolves against the directory you run
+from, not the directory the list lives in, so a list that works in one place
+silently fails in another:
 
 ```
-pgs_alpha.txt
-pgs_beta.txt
+/data/pgs/pgs_alpha.txt
+/data/pgs/pgs_beta.txt
 ```
 
-Blank lines and `#` comments are skipped; paths are relative to where you run
-the command. Each column takes its name from the file's basename up to the first
-dot, so `PGS000123.txt.gz` becomes `PGS000123`; two paths yielding the same name
-is an error.
+Relative paths work too, and `example/models.txt` uses them so it runs from
+`example/`.
+
+Blank lines and `#` comments are skipped. Each column takes its name from the
+file's basename up to the first dot, so `PGS000123.txt.gz` becomes `PGS000123`;
+two paths yielding the same name is an error.
 
 Every model must use the **same column layout**; the five indices apply to all
 of them:
