@@ -7,16 +7,19 @@
 
 > [!WARNING]
 > **Beta.** Adjutant is under active development and issues may arise. The
-> `--score` engine is unmodified upstream code and its output is checked against
-> stock plink2 on every build, but the flags built on top of it are newer and
-> less exercised in the wild. Check your results, and please
+> `--score` engine is unmodified upstream code, checked against stock plink2 on
+> every build, but the flags built on top of it are newer and less exercised in
+> the wild. Check your results, and please
 > [open an issue](https://github.com/faramer86/adjutant/issues) if something
-> looks wrong — a report with the command line and the log is enough to act on.
+> looks wrong — the command line and the log are enough to act on.
 
-Adjutant is a **PLINK 2**, but only with kept and extended functions for polygenic scores experiments. It aligns them to the provided reference, it computes them, it evaluates them (e.g. Incremental R2), you only need to give an order.
+Adjutant is **PLINK 2** reduced to the functions for polygenic-score
+experiments, and those functions extended. It aligns scores to the provided
+reference, it computes them, it evaluates them (e.g. Incremental R2) — you only
+need to give an order.
 
-One binary, no runtime dependencies, quick, easy, with `--score` output that is byte-identical
-to stock plink2.
+One binary, no runtime dependencies, quick, easy, with `--score` output
+byte-identical to stock plink2.
 
 > **Most of this code is reduced [PLINK 2.0](https://github.com/chrchang/plink-ng)'s**,
 > and the credit belongs there. `adjutant` was made by deleting commands and reusing functions to create new functions, not by writing a scorer. If you find it useful, hit a star for this repository and cite PLINK 2 — see [NOTICE](NOTICE).
@@ -31,9 +34,9 @@ to stock plink2.
 | **Evaluate** | scores + a phenotype | `.best_pgs`, `.pgs_corr` | `--give-best-pgs`, `--give-corr-matrix` |
 | **Harmonise** | weights + a `.bim` | `.matched` | `--pgs-model`, `--pgs-models-list` |
 
-Score and evaluate can run in one command. Evaluate also takes a score matrix you
-already have (`--sscore`). Harmonise is standalone — two text files in, two out,
-no genotypes.
+Score and evaluate can run in one command; evaluate also takes a score matrix
+you already have (`--sscore`). Harmonise is standalone — two text files in, two
+out, no genotypes.
 
 ---
 
@@ -47,7 +50,7 @@ Needs a C++17 compiler, zlib, and a BLAS/LAPACK (Accelerate on macOS, OpenBLAS
 elsewhere). Everything else is vendored.
 
 Pre-built macOS arm64 and Linux x86-64 binaries — including a fully static one
-that needs no glibc — are attached to the GitHub release:
+needing no glibc — are attached to the GitHub release:
 1) Linux (86): link
 2) MacOS: link
 
@@ -63,10 +66,9 @@ cd example
 ```
 
 300 samples and 40 variants, small enough to read, and not random noise:
-`HEIGHT` is genuinely generated from `PGS_B`, so the tool has a real answer to
-find. The genotypes ship as both a `.bed/.bim/.fam` trio and a
-`.pgen/.pvar/.psam` one; the examples use `--bfile`, and `--pfile demo` works
-identically.
+`HEIGHT` is generated from `PGS_B`, so the tool has a real answer to find. The
+genotypes ship as both a `.bed/.bim/.fam` trio and a `.pgen/.pvar/.psam` one;
+the examples use `--bfile`, and `--pfile demo` works identically.
 
 ### The input files, and what each is for
 
@@ -83,12 +85,12 @@ identically.
 | `published_pgs.txt` | `--pgs-model` | chr, pos, effect allele, other allele, beta, freq |
 | `demo.afreq` | `--read-freq` | allele frequencies |
 
-Copy any of them as a template for your own data — see
+Copy any as a template for your own data — see
 [example/README.md](example/README.md) for how they were made.
 
 ---
 
-## Scoring
+## I. Scoring
 
 ### One model
 
@@ -114,15 +116,15 @@ adjutant --bfile demo --score weights.txt 1 2 header-read \
 | 0 | per1 | 80 | 34 | -0.03 | 0.0375 | -0.01 |
 | 0 | per2 | 80 | 48 | -0.00375 | 0.02125 | -0.01375 |
 
-The `FID` column comes from the `.fam`, which always carries one — `--pfile`
+The `FID` column comes from the `.fam`, which always carries one; `--pfile`
 output on a `.psam` without FIDs has no such column. Everything else is
-identical between the two.
+identical.
 
 ### Split a model into partitions
 
 `--score-partitions` takes a 0/1 mask per variant and scores each subset
-separately, in the same pass. A partition is any set of variants you want scored
-on its own — the file decides what they mean, and the header names them:
+separately in the same pass. A partition is any set of variants you want scored
+on its own; the file defines them, the header names them:
 
 ```
 SNP    PART_A  PART_B
@@ -134,7 +136,7 @@ A variant may belong to several partitions, or to none. Values must be exactly
 `0` or `1`.
 
 ```sh
-adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 4 \
+adjutant --bfile demo --score weights.txt 1 2 4 header-read \
          --score-partitions partitions.txt --out result
 ```
 
@@ -146,15 +148,13 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 4 \
 
 `PGS_B_AVG` is the unpartitioned total. Each partition divides by **its own**
 variants' allele count, so partitions of different sizes stay comparable — and
-therefore do **not** sum to the total. Use `cols=+scoresums` if you need sums,
-which do.
+therefore do **not** sum to the total. `cols=+scoresums` gives sums, which do.
 
 ### Drop the MHC
 
-The MHC's long-range LD and extreme polymorphism make it behave unlike the rest
-of the genome, so PGS work often excludes it. Pick the flag matching **your
-data's build** — there is no auto-detection, and the wrong one silently drops
-the wrong window:
+Long-range LD and extreme polymorphism make the MHC unlike the rest of the
+genome, so PGS work often excludes it. Pick the flag for **your data's build** —
+nothing auto-detects, and the wrong flag silently drops the wrong window:
 
 | flag | region | chr6 interval |
 |---|---|---|
@@ -174,33 +174,29 @@ adjutant --bfile mhc --exclude-mhc-hg19 --score mhc_weights.txt 1 2 3 --out resu
 --score: 14 variants processed.
 ```
 
-Every run logs the interval it applied, so a log says which coordinates were
-used rather than leaving you to infer them from the flag name.
-
-The flags work the same way in harmonisation, where they apply to **both** the
-`.bim` and the weight file, so excluded variants are absent from the
-`.match_report` rather than reported as unmatched:
+Every run logs the interval it applied. In harmonisation the flags apply to
+**both** the `.bim` and the weight file, so excluded variants are absent from
+the `.match_report` rather than reported as unmatched:
 
 ```sh
 adjutant --bim mhc.bim --pgs-model mhc_pgs.txt 1 2 3 4 5 --exclude-xmhc-hg38 --out h
 ```
 
 > [!IMPORTANT]
-> **The extended region does not contain the plain one.** The two come from
+> **The extended region does not contain the plain one.** They come from
 > different published definitions: the GRC MHC region ends **79,933 bp past** the
 > xMHC end, in both builds. So `--exclude-xmhc-hg19` reaches 2.75 Mb further 5′
 > but stops short 3′, and can exclude **fewer** variants than
-> `--exclude-mhc-hg19` — on the `example/mhc` fileset it excludes 9 against 10.
+> `--exclude-mhc-hg19` — on the `example/mhc` fileset, 9 against 10.
 >
-> This is intrinsic to the source definitions, not a quirk of this tool; no
-> pairing of published MHC and xMHC coordinates nests. adjutant reports each
-> region exactly as published rather than silently widening one to fit the other.
-> If you want strictly everything, run the plain flag as well in a separate pass
-> and intersect the results.
+> No published MHC/xMHC pairing nests, so this is intrinsic to the definitions,
+> not a quirk of this tool: adjutant reports each region exactly as published
+> rather than silently widening one to fit the other. To exclude everything, run
+> the plain flag in a separate pass and intersect.
 
 ---
 
-## Evaluation
+## II. Evaluation
 
 ### Rank models against a trait
 
@@ -220,7 +216,7 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 3-5 \
 
 PGS_B is the model `HEIGHT` was built from, and it wins. The two noise models
 get an `R2_INCR_L95` of exactly **0** — their interval contains zero. Read the
-interval before you read the ranking.
+interval before the ranking.
 
 `BETA` is per standard deviation of the score. Two models are fitted per row:
 phenotype on covariates alone, then with the score added.
@@ -262,7 +258,7 @@ The real signal survives at 0.172. The two noise models go **negative** — they
 predict worse than the covariates alone — and a negative R² gets `NA` bounds.
 That is the flag earning its keep.
 
-`--folds 1` is the default and is bit-identical to omitting the flag.
+`--folds 1` is the default, bit-identical to omitting the flag.
 
 ### Correlate the models
 
@@ -316,7 +312,7 @@ adjutant --sscore result.sscore --pheno pheno.txt --covar covar.txt \
 
 ---
 
-## Harmonisation
+## III. Harmonisation
 
 A published PGS rarely uses your dataset's allele coding. `--pgs-model` aligns
 it, reimplementing `bigsnpr::snp_match()`.
@@ -363,50 +359,45 @@ if every weight is positive with mean in [0.5, 2.0].
 
 ### Matching on rsID instead of position
 
-If the weight file and your target were built against **different genome
-builds**, matching on `chr:pos` finds nothing. A leading `id` joins on the
-variant ID instead:
+If the weight file and your target come from **different genome builds**,
+`chr:pos` matching finds nothing. A leading `id` joins on the variant ID
+instead:
 
 ```sh
 adjutant --bim target.bim --pgs-model pgs_rsid.txt id 1 4 5 6 --out harmonised
 ```
 
-The numbers are now the ID, effect allele, other allele and weight columns —
-four instead of five, since chromosome and position are no longer used.
-
-`example/pgs_rsid.txt` is exactly this case: an rsID-keyed PGS whose positions
-belong to another build.
+Four numbers now, not five — ID, effect allele, other allele, weight — since
+chromosome and position go unused. `example/pgs_rsid.txt` is exactly this case:
+an rsID-keyed PGS whose positions belong to another build.
 
 ```
 --pgs-model: 40 source variants, 40 found in the .bim by ID.
 --pgs-model: 100.0% of source variants found in the .bim by ID.
 ```
 
-The same file matched on position finds **nothing at all**:
+Matched on position, the same file finds **nothing at all**:
 
 ```
 --pgs-model: 40 source variants, 0 found in the .bim by position.
 ```
 
-Everything else is unchanged — allele matching, beta negation, the report, and
-`--exclude-mhc-*` all behave identically, and `.matched` still carries the
-target's coordinates.
+Everything else is unchanged: allele matching, beta negation, the report and
+`--exclude-mhc-*` behave identically, and `.matched` still carries the target's
+coordinates.
 
 > [!IMPORTANT]
 > **This trades a build problem for an rsID-versioning one.** Merged and retired
 > rsIDs mean a source and target built against different dbSNP releases can
 > silently fail to match, or match the *wrong* variant — and unlike a build
-> mismatch, that failure is invisible in the coordinates, because they never
-> enter the comparison.
+> mismatch, invisible in the coordinates, which never enter the comparison.
 >
-> That is why the run prints the match rate. A join that found 12% is telling
-> you the two files disagree about what an rsID means; read it before you trust
-> the output.
+> So the run prints the match rate: a join that found 12% means the two files
+> disagree about what an rsID means. Read it before you trust the output.
 >
 > Rows with a `.` ID are skipped on both sides. Where the `.bim` repeats an ID
-> the first row wins, and every unreachable row is listed in
-> `<prefix>.duplicate_ids` — consider re-IDing both files as
-> `chr_pos_ref_alt`, which is unique by construction.
+> the first row wins; unreachable rows are listed in `<prefix>.duplicate_ids`.
+> Consider re-IDing both files as `chr_pos_ref_alt`, unique by construction.
 
 ### Rescuing strand-ambiguous variants
 
@@ -419,7 +410,8 @@ adjutant --bim target.bim --pgs-model published_pgs.txt 1 2 3 4 5 6 \
 ```
 
 ```
---pgs-model: 14 ambiguous; 11 resolved by frequency (MAF < 0.4 on both sides),
+--pgs-model: 14 ambiguous; 11 resolved by frequency (--resolve-ambiguous, MAF < 0.4 on both sides),
+             3 unresolved and dropped.
 --pgs-model: 37 matched (8 strand-flipped, 13 reversed), 0 unmatched on alleles.
 ```
 
@@ -432,20 +424,20 @@ refused rather than guessed. Column 6 is the source effect-allele frequency.
 target and merges them into one matrix — one column per model, one row per
 variant matched by at least one of them.
 
-You provide a plain text file listing the weight files, one path per line:
+Give it a text file listing the weight files, one per line:
 
 ```
 pgs_alpha.txt
 pgs_beta.txt
 ```
 
-Blank lines and lines starting with `#` are skipped. Paths are relative to
-where you run the command. Each column is named from the file's basename up to
-the first dot, so `PGS000123.txt.gz` becomes `PGS000123`; two paths yielding the
-same name is an error.
+Blank lines and `#` comments are skipped; paths are relative to where you run
+the command. Each column takes its name from the file's basename up to the first
+dot, so `PGS000123.txt.gz` becomes `PGS000123`; two paths yielding the same name
+is an error.
 
-Every model must use the **same column layout**, because the five column
-indices apply to all of them:
+Every model must use the **same column layout**; the five indices apply to all
+of them:
 
 ```
 chr  pos  effect_allele  other_allele  beta
@@ -471,16 +463,15 @@ adjutant --bim target.bim --pgs-models-list models.txt 1 2 3 4 5 --out merged
 | snp14 | C | -0.4 | 0.5 |
 | snp19 | T | **0** | 0.4 |
 
-A model that does not carry a variant gets `0`, not a missing value. Here the
-union is 26 variants, of which only 3 carry a nonzero weight from *both* models:
-the two files overlap on 11 source rows, but most of those are strand-ambiguous
-(A/T, C/G) and are dropped unless you pass `--allow-ambiguous` or
-`--resolve-ambiguous`. A zero therefore means "this model does not contribute
-here", whether because the model lacked the variant or because the match was
-rejected — check `.match_report` to tell those apart.
+A model that does not carry a variant gets `0`, not a missing value. Of the 26
+variants in the union only 3 carry a nonzero weight from *both* models: the
+files overlap on 11 source rows, but most are strand-ambiguous (A/T, C/G) and
+dropped unless you pass `--allow-ambiguous` or `--resolve-ambiguous`. So a zero
+means the model lacked the variant *or* its match was rejected —
+`.match_report` tells them apart.
 
 **Harmonising before merging is the whole point.** Two models can name opposite
-effect alleles for the same variant. Merging raw weight files on variant ID
+effect alleles for the same variant; merging raw weight files on variant ID
 would put one column's beta on the wrong allele, and nothing downstream would
 notice. `merged.match_report` shows the reorientation:
 
@@ -488,9 +479,9 @@ notice. `merged.match_report` shows the reorientation:
 |---|---|---|---|---|---|---|---|---|---|
 | pgs_beta | 1 | 14 | T | C | -0.5 | **REVERSED** | snp14 | C | **0.5** |
 
-`pgs_beta` measured its effect on `T`; the target's A1 is `C`; so the weight is
-re-expressed as `+0.5` on `C`. Every column in `.matched` is with respect to the
-same A1, which is what makes them comparable.
+`pgs_beta` measured its effect on `T`, the target's A1 is `C`, so the weight is
+re-expressed as `+0.5` on `C`. Every column in `.matched` is against the same
+A1, which is what makes them comparable.
 
 > [!NOTE]
 > **Reorienting a weight shifts absolute scores by a constant.** For a biallelic
@@ -498,20 +489,17 @@ same A1, which is what makes them comparable.
 >
 > `β · dosage(effect) = 2β − β · dosage(other)`
 >
-> Writing `−β` against the other allele therefore reproduces the original
-> contribution **minus `2β`**. Summed over the reversed variants that is a single
-> constant, identical for every sample.
+> Writing `−β` against the other allele reproduces the original contribution
+> **minus `2β`** — over the reversed variants, one constant identical for every
+> sample. Anything fitted with an intercept absorbs it, so **rankings,
+> correlations, R² and regression coefficients are unchanged**; only raw
+> `SCORE_SUM` moves. On 5 variants at |β| = 0.4, every sample's sum differed by
+> exactly `4.0` (= 2 × 0.4 × 5), `r = 1.000000000000` across 200 samples.
 >
-> This is exact for **additive** models, which is all adjutant scores. It leaves
-> **rankings, correlations, R² and regression coefficients unchanged** — anything
-> fitted with an intercept absorbs the constant. Only raw `SCORE_SUM` values
-> move. Measured on 5 variants at |β| = 0.4: every sample's sum differed by
-> exactly `4.0` (= 2 × 0.4 × 5), with `r = 1.000000000000` across 200 samples.
->
-> The same identity does **not** hold for dominant or recessive effect types,
-> which is why tools supporting those must split a model set into several files
-> rather than reorient it. adjutant is additive-only, so one merged file always
-> suffices.
+> Exact for **additive** models only. Dominant and recessive effect types break
+> the identity, so tools supporting them must split a model set across files
+> instead of reorienting it; adjutant is additive-only, so one merged file
+> always suffices.
 
 ---
 
@@ -556,12 +544,12 @@ Non-converged rows sort last, `NA` in every numeric field.
 ## Checking a build
 
 `--score` output is **byte-identical to stock plink2**. That is the design
-contract, and it is why the build uses `-ffp-contract=off` — the flag stops the
-compiler fusing multiply-add in the scoring dot product, which is what keeps
-`-O3` identical to `-O2` and to upstream.
+contract, and why the build uses `-ffp-contract=off`: the flag stops the compiler
+fusing multiply-add in the scoring dot product, which keeps `-O3` identical to
+`-O2` and to upstream.
 
-You do not have to take that on trust. If you have plink2 installed, check it
-against your own data:
+You need not take that on trust. If you have plink2 installed, check against
+your own data:
 
 ```sh
 plink2   --bfile mydata --score w.txt 1 2 header-read --out ref
