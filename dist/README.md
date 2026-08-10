@@ -56,9 +56,17 @@ Every binary must be **run**, not merely compiled.
 `score_check.sh` covers `--score` and nothing else, so everything built on top of
 it was exercised separately: plain and partitioned scoring, `--give-best-pgs`
 with and without `--folds`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
-`--pgs-model`, `--pgs-models-list`, all four MHC regions on both routes, and the
-refusal of the `--extract`/`--exclude` interval modifiers. Sixteen outputs in
-all, compared by checksum across platforms.
+`--pgs-model` on both keys, `--pgs-models-list`, all four MHC regions on both
+routes, a `.sscore` wider than the old 1024-column ceiling, and the refusal of
+the `--extract`/`--exclude` interval modifiers. Sixteen commands, 27 outputs,
+compared by checksum across platforms.
+
+**Make the sweep assert on each step.** The first version of it ran each command
+with `|| true` and checksummed whatever files appeared. Five of the sixteen were
+failing on wrong flag names and column specs — `--fold-seed` does not exist, and
+`--pgs-models-list` could not resolve the bare filenames in `models.txt` — and
+the run still reported success, because a missing output is indistinguishable
+from a skipped comparison. Name the file each step must produce and check it.
 
 - **macOS arm64** — all four suites green: 89/89 goldens byte-identical, the
   input matrix, every `pgs_eval_check` assertion, and the demo.
@@ -79,13 +87,19 @@ goldens were generated with. It does not hold bit-for-bit on Linux, which uses
 gcc and OpenBLAS rather than clang and Accelerate.
 
 The disagreement is confined to cells whose value is **itself numerically zero**.
-Re-measured at every release: on the partitioned `.sscore`, **2 of 900 cells**
-differ, by at most **8.33e-18**, and the largest value involved in any differing
-cell is **5.55e-18**. Those are
-columns where the score cancels and only rounding residue survives. Every
-meaningful digit of every other field matches, and the difference is unchanged
-from the previously shipped Linux build — it is a property of the toolchain, not
-of any code change.
+Re-measured at every release, across the six `.sscore` outputs of the sweep:
+**49 of 15,000 numeric cells** differ, by at most **4.16e-18**, and the largest
+value appearing in any differing cell is **1.04e-17**. Those are columns where
+the score cancels and only rounding residue survives — against scores of order
+0.1 they are zero. Every meaningful digit of every other field matches, and the
+other 21 outputs, including `.matched`, `.match_report` on both keys, the merged
+matrix, `.pgs_corr`, `.best_pgs` and every MHC output, are byte-identical.
+
+It is a property of the toolchain, not of any code change. The figures move a
+little between releases because they depend on which commands the sweep runs,
+not on the size of the error: an earlier, narrower measurement over the
+partitioned `.sscore` alone reported 2 of 900 cells. Quote the sweep the numbers
+came from, or they read as a regression when the sweep merely grew.
 
 ## Runtime requirements
 
@@ -183,6 +197,19 @@ normalises only the volatile fields macOS emits; Linux adds `, ~NNNN available`
 to the RAM line and a `Using up to N compute threads.` line. That is log
 formatting, not scoring. The `.sscore` files are the numerical contract and are
 compared directly.
+
+**Purge `*.o` from the staged copy before building in the container.** A native
+`make release` leaves 68 Mach-O objects in the tree. Copy those into the
+container and `make` treats them as current, so the Linux link is handed macOS
+objects. Excluding `bin/` is not enough — the objects sit beside the sources.
+
+**A bind mount from an unshared path mounts empty and says nothing.** Docker
+Desktop only shares configured prefixes; a scratchpad under `/private/tmp` is
+not one. `-v /private/tmp/...:/src` produced an empty `/src`, the build did no
+work, and the run exited 0 with no output at all. Stage under the home
+directory, and check `ls /src | wc -l` inside the container before trusting a
+build. Capture docker's own exit status into a variable — piping its output
+through `tail` reports the exit code of `tail`.
 
 **Cross-compiling to x86-64 on Apple Silicon is unreliable.** Under qemu,
 `cc1`/`g++` take a SIGSEGV at random — a different translation unit each time,
