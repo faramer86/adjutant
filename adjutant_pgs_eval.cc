@@ -3122,6 +3122,27 @@ static void SscoreSkipFidCol(char** ci_ptr, uint32_t id_skip) {
 // pheno_range_list: from --pheno-name or --pheno-col-nums (may have name_ct=0
 // meaning "use all columns").
 // ---------------------------------------------------------------------------
+// Grows the token-pointer buffer shared by the three row-parsing loops in
+// BestPgsFromSscore.  Each loop sizes it once from the header rather than per
+// row: the column layout is fixed by the header, so a wide score matrix costs
+// one allocation instead of a per-sample rescan.  Heap rather than a fixed
+// array because a merged matrix has no natural width limit -- a 1024-entry
+// stack array used to reject any .sscore past 1024 columns.
+static BoolErr EnsureTokPtrCap(uint32_t need, const char*** tok_ptrs_ptr,
+                               uint32_t* tok_ptrs_cap_ptr) {
+  if (need <= *tok_ptrs_cap_ptr) {
+    return 0;
+  }
+  const char** new_ptrs = S_CAST(const char**, realloc(
+      *tok_ptrs_ptr, S_CAST(uintptr_t, need) * sizeof(const char*)));
+  if (!new_ptrs) {
+    return 1;
+  }
+  *tok_ptrs_ptr = new_ptrs;
+  *tok_ptrs_cap_ptr = need;
+  return 0;
+}
+
 PglErr BestPgsFromSscore(const char* sscore_fname,
                          const RangeList* score_col_range,
                          const char* pheno_fname,
@@ -3139,6 +3160,10 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
   FILE* outfile = nullptr;
 
   // All heap allocations; freed in ret_1.
+  // Reused by the score, phenotype and covariate row loops; each sizes it from
+  // its own header before reading any data row.
+  const char** tok_ptrs = nullptr;
+  uint32_t tok_ptrs_cap = 0;
   char**   score_col_names = nullptr;
   uint32_t score_col_ct = 0;
   // iid_buf: flat IID list from the .sscore (one C string per row).
@@ -3420,6 +3445,20 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       goto BestPgsFromSscore_ret_1;
     }
 
+    // Highest token index any selected score column needs.  Fixed by the
+    // header, so it is computed here rather than per data row.
+    uint32_t max_tok_needed = sscore_id_skip;
+    for (uint32_t sc = 0; sc != score_col_ct; ++sc) {
+      if (score_tok_idxs[sc] > max_tok_needed) {
+        max_tok_needed = score_tok_idxs[sc];
+      }
+    }
+    if (EnsureTokPtrCap(max_tok_needed + 1, &tok_ptrs, &tok_ptrs_cap)) {
+      free(score_tok_idxs);
+      reterr = kPglRetNomem;
+      goto BestPgsFromSscore_ret_1;
+    }
+
     // Read data rows.
     for (;;) {
       char* line = TextGet(&txs);
@@ -3446,23 +3485,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
         score_data_rowmajor = new_scores;
       }
 
-      // Parse all tokens up to the maximum column index we need.
-      // Maximum token index needed = max(0, max(score_tok_idxs)).
-      uint32_t max_tok_needed = 0;
-      for (uint32_t sc = 0; sc != score_col_ct; ++sc) {
-        if (score_tok_idxs[sc] > max_tok_needed) {
-          max_tok_needed = score_tok_idxs[sc];
-        }
-      }
-
       // Tokenize up to max_tok_needed + 1 tokens.
-      const char* tok_ptrs[1024];  // generous upper bound
-      if (max_tok_needed >= 1024) {
-        logerrputs("Error: --sscore: too many columns (max 1023).\n");
-        free(score_tok_idxs);
-        reterr = kPglRetMalformedInput;
-        goto BestPgsFromSscore_ret_1;
-      }
       const char* tp = line;
       for (uint32_t ti = 0; ti <= max_tok_needed; ++ti) {
         tok_ptrs[ti] = tp;
@@ -3754,6 +3777,19 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       goto BestPgsFromSscore_ret_1;
     }
 
+    // Highest token index any selected phenotype needs; fixed by the header.
+    uint32_t max_tok = pheno_id_skip;
+    for (uint32_t ph = 0; ph != pheno_col_ct; ++ph) {
+      if (pheno_sel_token_idxs[ph] > max_tok) {
+        max_tok = pheno_sel_token_idxs[ph];
+      }
+    }
+    if (EnsureTokPtrCap(max_tok + 1, &tok_ptrs, &tok_ptrs_cap)) {
+      free(pheno_sel_token_idxs);
+      reterr = kPglRetNomem;
+      goto BestPgsFromSscore_ret_1;
+    }
+
     for (;;) {
       char* line = TextGet(&txs);
       if (!line) break;
@@ -3776,21 +3812,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
         pheno_data = new_data;
       }
 
-      // Find max token index needed.
-      uint32_t max_tok = 0;
-      for (uint32_t ph = 0; ph != pheno_col_ct; ++ph) {
-        if (pheno_sel_token_idxs[ph] > max_tok) {
-          max_tok = pheno_sel_token_idxs[ph];
-        }
-      }
-
       // Tokenize up to max_tok+1.
-      const char* tok_ptrs[1024];
-      if (max_tok >= 1024) {
-        free(pheno_sel_token_idxs);
-        reterr = kPglRetMalformedInput;
-        goto BestPgsFromSscore_ret_1;
-      }
       const char* tp = line;
       for (uint32_t ti = 0; ti <= max_tok; ++ti) {
         tok_ptrs[ti] = tp;
@@ -3988,6 +4010,13 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       goto BestPgsFromSscore_ret_1;
     }
 
+    // Covariates are taken in header order, so the row width is fixed.
+    const uint32_t need_ct = covar_col_ct + 1 + covar_id_skip;
+    if (EnsureTokPtrCap(need_ct, &tok_ptrs, &tok_ptrs_cap)) {
+      reterr = kPglRetNomem;
+      goto BestPgsFromSscore_ret_1;
+    }
+
     for (;;) {
       char* line = TextGet(&txs);
       if (!line) break;
@@ -4010,12 +4039,6 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       }
 
       // Parse up to covar_col_ct + 1 tokens.
-      const char* tok_ptrs[1024];
-      const uint32_t need_ct = covar_col_ct + 1 + covar_id_skip;
-      if (need_ct > 1024) {
-        reterr = kPglRetMalformedInput;
-        goto BestPgsFromSscore_ret_1;
-      }
       const char* tp = line;
       for (uint32_t ti = 0; ti < need_ct; ++ti) {
         tok_ptrs[ti] = tp;
@@ -4488,6 +4511,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
 
  BestPgsFromSscore_ret_1:
   PgsPhenoPairsFree(&pairs);
+  free(tok_ptrs);
   free(pair_keep_idxs);
   if (outfile) fclose(outfile);
   CleanupTextStream2("--sscore input", &txs, &reterr);

@@ -127,6 +127,13 @@ Since `f32fd02`:
   in effect", and then filter nothing — an `--extract` meant to restrict a score
   to one region silently returned the genome-wide score. They are hard errors
   now. ID-based `--extract`/`--exclude` are unaffected.
+- **`--sscore` no longer caps input width at 1024 columns.** The three row
+  parsers tokenised into a fixed 1024-entry array, so a `.sscore` past 1024
+  columns (about 1021 models, well within reach of a merged
+  `--pgs-models-list` matrix) was rejected with "too many columns", and a
+  `--pheno` past 1024 phenotypes or a `--covar` past 1023 covariates failed
+  *silently* — exit 6 with nothing on stderr. The buffer is now sized from the
+  header, once per file rather than once per sample.
 - **`--pgs-models-list` no longer scales memory with model count.** It used to
   hold every model's parsed records until the end, at 227 bytes per source
   variant — about 11x the size of the input files. 249 models totalling 5.9 GB
