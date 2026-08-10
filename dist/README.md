@@ -53,6 +53,18 @@ stating precisely rather than calling the result "static".
 
 Every binary must be **run**, not merely compiled.
 
+**The commit gate does not build what ships.** `tools/verify_and_commit.sh`
+compiles with `BASEFLAGS="-g -ffp-contract=off -DZSTD_MULTITHREAD"` — no `-O3`,
+no `-DNDEBUG` — while `make release` adds both. A green gate is therefore
+evidence about the unoptimised binary, and says nothing about the optimised one
+beyond what they share. Run the suites and the sweep again against the actual
+`make release` output before copying it here. The two are easy to tell apart by
+size: the release build is 1,314,248 bytes, the gate's is 1,449,656.
+
+`make release` is reproducible — two clean builds of `b2f71f8` gave the same
+SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
+different recipe, not build nondeterminism.
+
 `score_check.sh` covers `--score` and nothing else, so everything built on top of
 it was exercised separately: plain and partitioned scoring, `--give-best-pgs`
 with and without `--folds`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
