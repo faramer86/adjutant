@@ -2000,6 +2000,7 @@ PglErr Plink2Core(const Plink2Cmdline* pcp, MakePlink2Flags make_plink2_flags, c
                                  pcp->pgs_prevalence, pcp->pgs_folds,
                                  pcp->pgs_fold_seed,
                                  give_best_pgs, corr_matrix,
+                                 (pcp->score_info.flags / kfScoreBestPgsNoNa) & 1,
                                  pcp->pgs_pheno_pairs_fname,
                                  outname, outname_end);
           if (unlikely(reterr)) {
@@ -2528,8 +2529,16 @@ int main(int argc, char** argv) {
 
       case 'g':
         if (strequal_k_unsafe(flagname_p2, "ive-best-pgs")) {
-          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 0, 0))) {
+          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 0, 1))) {
             goto main_ret_INVALID_CMDLINE_2A;
+          }
+          if (param_ct) {
+            const char* modif = argvk[arg_idx + 1];
+            if (unlikely(!strequal_k(modif, "no-na", strlen(modif)))) {
+              snprintf(g_logbuf, kLogbufSize, "Error: Invalid --give-best-pgs argument '%s'; 'no-na' is the only one accepted.\n", modif);
+              goto main_ret_INVALID_CMDLINE_WWA;
+            }
+            pc.score_info.flags |= kfScoreBestPgsNoNa;
           }
           pc.score_info.flags |= kfScoreGiveBestPgs;
           pc.dependency_flags |= kfFilterPsamReq;
@@ -3475,6 +3484,7 @@ int main(int argc, char** argv) {
                                  pc.pgs_prevalence, pc.pgs_folds,
                                  pc.pgs_fold_seed,
                                  (pc.score_info.flags / kfScoreGiveCorrMatrix) & 1,
+                                 (pc.score_info.flags / kfScoreBestPgsNoNa) & 1,
                                  pc.pgs_pheno_pairs_fname,
                                  outname, outname_end);
       goto main_ret_1;

@@ -94,6 +94,7 @@ See [example/README.md](example/README.md) for how they were made.
 - **[Chosen pairs only](#5-evaluate-only-certain-pairs)** — Restrict evaluation to named (phenotype, model) pairs instead of the full cross-product (`--pgs-pheno-pairs`).
 - **[One PGS, every trait](#6-evaluate-single-pgs-against-all-of-the-phenotypes)** — Evaluate a score against every phenotype in the file by omitting `--pheno-name`.
 - **[Reuse a score matrix](#7-use-a-score-matrix-you-already-have)** — Evaluate scores computed earlier, without reading genotypes again (`--sscore`).
+- **[Trim empty columns](#8-drop-the-columns-your-run-cannot-fill)** — Omit the `.best_pgs` columns a run cannot fill, which is 8 of 21 when every phenotype is quantitative (`--give-best-pgs no-na`).
 
 **[III. Harmonisation](#iii-harmonisation)** — weights + a `.bim` → `.matched`
 
@@ -325,6 +326,32 @@ Sometimes you already have a `.sscore` from a previous run, or from plink2 or ad
 adjutant --sscore result.sscore --pheno pheno.txt --covar covar.txt \
          --give-best-pgs --out ranked
 ```
+
+### 8) Drop the columns your run cannot fill
+
+`.best_pgs` always has 21 columns, eight of which describe binary traits. A run
+where every phenotype is quantitative fills all eight with `NA`, so roughly two
+fifths of the file carries nothing. `no-na` omits them:
+
+```sh
+adjutant --sscore result.sscore --pheno metabolites.txt --covar covar.txt \
+         --give-best-pgs no-na --out ranked
+```
+
+| dropped | when |
+|---|---|
+| `N_CASE`, `OR`, `AUC_NULL`, `AUC_FULL`, `AUC_INCR` | no phenotype is case/control |
+| `R2L_INCR`, `R2L_INCR_L95`, `R2L_INCR_U95` | that, or `--prevalence` is absent |
+
+The rule is the configuration, not the data. A column is dropped because the run
+cannot populate it, not because its values happened to come out `NA`, so the
+column set follows from the command line alone and two runs over the same cohort
+always produce the same layout. A column left empty because every fit failed to
+converge is therefore kept.
+
+One binary phenotype anywhere keeps the case/control columns for every row,
+including the quantitative ones, where they stay `NA`. A column set that varied
+from row to row would not be a table.
 
 ---
 

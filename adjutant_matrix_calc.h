@@ -65,6 +65,10 @@ FLAGSET_DEF_START()
   kfScoreColScoreSums = (1 << 25),
   kfScoreGiveBestPgs = (1 << 26),
   kfScoreGiveCorrMatrix = (1 << 27),
+  // --give-best-pgs no-na: omit the .best_pgs columns the run's configuration
+  // cannot fill.  Must stay clear of kfScoreColAll above, which is derived from
+  // kfScoreColScoreSums and so covers only bits 16..25.
+  kfScoreBestPgsNoNa = (1 << 28),
   kfScoreListColDefault = (kfScoreColMaybefid | kfScoreColMaybesid | kfScoreColPhenos | kfScoreColScoreAvgs),
   kfScoreColDefault = (kfScoreListColDefault | kfScoreColNallele | kfScoreColDosageSum),
   kfScoreColAll = ((kfScoreColScoreSums * 2) - kfScoreColMaybefid)

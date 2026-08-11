@@ -1326,6 +1326,102 @@ static const char kBestPgsHeader[] =
     "R2_INCR\tR2_INCR_L95\tR2_INCR_U95\tR2L_INCR\tR2L_INCR_L95\tR2L_INCR_U95\t"
     "AUC_NULL\tAUC_FULL\tAUC_INCR\n";
 
+// 0-based .best_pgs column indices, for the no-na mask below.  Named rather
+// than written as literals because the mask is the one place outside the
+// header string that has to agree with the layout.
+enum {
+  kBestPgsColNCase = 4,
+  kBestPgsColOr = 7,
+  kBestPgsColR2lIncr = 15,
+  kBestPgsColR2lL95 = 16,
+  kBestPgsColR2lU95 = 17,
+  kBestPgsColAucNull = 18,
+  kBestPgsColAucFull = 19,
+  kBestPgsColAucIncr = 20,
+  kBestPgsColCt = 21
+};
+
+// Which .best_pgs columns the run can actually fill.  All 21 bits unless
+// --give-best-pgs no-na is given, in which case the columns a configuration
+// cannot populate are dropped:
+//   - the case/control columns, when no phenotype is binary
+//   - the liability columns, additionally when --prevalence is absent
+//
+// Structural rather than empirical: the header is written on the first
+// phenotype block, long before the last phenotype has been fitted, so "every
+// value in this column came out NA" is not a question this writer can answer
+// without holding every row for every phenotype in memory.  Deciding from the
+// configuration also keeps the layout reproducible from the command line, so
+// one extra fit converging cannot change the shape of the file.
+static uint32_t BestPgsKeepMask(uint32_t no_na, uint32_t any_cc, uint32_t has_prevalence) {
+  const uint32_t all = (1U << kBestPgsColCt) - 1;
+  if (!no_na) {
+    return all;
+  }
+  uint32_t mask = all;
+  if (!any_cc) {
+    mask &= ~((1U << kBestPgsColNCase) | (1U << kBestPgsColOr) |
+              (1U << kBestPgsColAucNull) | (1U << kBestPgsColAucFull) |
+              (1U << kBestPgsColAucIncr));
+  }
+  if ((!any_cc) || (!has_prevalence)) {
+    mask &= ~((1U << kBestPgsColR2lIncr) | (1U << kBestPgsColR2lL95) |
+              (1U << kBestPgsColR2lU95));
+  }
+  return mask;
+}
+
+// Drops the fields whose bit is clear from a tab-separated line, in place,
+// returning the new length.  A trailing newline is preserved.
+//
+// The header and every data row go through this one call with the same mask,
+// which is the point: the layout is described in exactly two places -- the
+// header string and this mask -- and never re-derived per row.  The note above
+// records what the alternative costs.  Teaching the four positional row-writing
+// paths to skip columns would have given each of them its own opinion about the
+// layout, and that is the shape of the bug that let unconverged rows emit 15
+// fields against 16 names undetected.
+static uint32_t CompactMaskedFields(char* line, uint32_t line_len, uint32_t keep_mask) {
+  const uint32_t all = (1U << kBestPgsColCt) - 1;
+  if (keep_mask == all) {
+    return line_len;
+  }
+  uint32_t nl = 0;
+  if (line_len && (line[line_len - 1] == '\n')) {
+    nl = 1;
+    --line_len;
+  }
+  char* wp = line;
+  const char* rp = line;
+  const char* line_end = &(line[line_len]);
+  uint32_t col_idx = 0;
+  uint32_t written = 0;
+  while (1) {
+    const char* field_end = rp;
+    while ((field_end != line_end) && (*field_end != '\t')) {
+      ++field_end;
+    }
+    if (keep_mask & (1U << col_idx)) {
+      if (written) {
+        *wp++ = '\t';
+      }
+      const uintptr_t flen = S_CAST(uintptr_t, field_end - rp);
+      memmove(wp, rp, flen);
+      wp = &(wp[flen]);
+      ++written;
+    }
+    if (field_end == line_end) {
+      break;
+    }
+    rp = &(field_end[1]);
+    ++col_idx;
+  }
+  if (nl) {
+    *wp++ = '\n';
+  }
+  return S_CAST(uint32_t, wp - line);
+}
+
 // Columns 7..21, i.e. everything an unconverged row has nothing to say about.
 // The literal run of "NA\t" this count replaces was one short for the whole
 // life of the 16-column layout: an unconverged row emitted 15 fields against 16
@@ -1417,7 +1513,7 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
                                   const uint32_t* keep_idxs, uint32_t keep_ct,
                                   FILE** outfile_ptr,
                                   char* outname, char* outname_end,
-                                  BestPgsRow* pheno_rows) {
+                                  BestPgsRow* pheno_rows, uint32_t keep_mask) {
   PglErr reterr = kPglRetSuccess;
   const uint32_t fit_ct = keep_idxs? keep_ct : score_col_ct;
   if (!fit_ct) {
@@ -1544,8 +1640,11 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
       return kPglRetOpenFail;
     }
 
-    const uint32_t hdr_len = S_CAST(uint32_t, sizeof(kBestPgsHeader) - 1);
-    if (unlikely(fwrite(kBestPgsHeader, hdr_len, 1, *outfile_ptr) != 1)) {
+    char hdr_buf[sizeof(kBestPgsHeader)];
+    memcpy(hdr_buf, kBestPgsHeader, sizeof(kBestPgsHeader));
+    const uint32_t hdr_len = CompactMaskedFields(
+        hdr_buf, S_CAST(uint32_t, sizeof(kBestPgsHeader) - 1), keep_mask);
+    if (unlikely(fwrite(hdr_buf, hdr_len, 1, *outfile_ptr) != 1)) {
       return kPglRetWriteFail;
     }
   }
@@ -1671,7 +1770,8 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
 
       *wp++ = '\n';
 
-      const uint32_t line_len = S_CAST(uint32_t, wp - wbuf);
+      const uint32_t line_len = CompactMaskedFields(
+          wbuf, S_CAST(uint32_t, wp - wbuf), keep_mask);
       if (unlikely(fwrite(wbuf, line_len, 1, *outfile_ptr) != 1)) {
         free(wbuf);
         return kPglRetWriteFail;
@@ -2495,7 +2595,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
                      double prevalence, uint32_t fold_ct, uint64_t fold_seed,
                      uint32_t give_best_pgs, uint32_t corr_matrix,
-                     const char* pairs_fname,
+                     uint32_t no_na, const char* pairs_fname,
                      char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
   PgsPhenoPairs pairs;
@@ -2888,6 +2988,19 @@ PglErr BestPgsReport(const char* sscore_fname,
       goto BestPgsReport_ret_1;
     }
 
+    // The no-na column mask needs to know whether any phenotype in the run is
+    // binary, and the header goes out on the first block, so this pre-pass runs
+    // before any of them is fitted.
+    uint32_t any_cc = 0;
+    for (uint32_t pi_pos = 0; pi_pos != usable_pheno_ct; ++pi_pos) {
+      if (pheno_cols[usable_pheno_idxs[pi_pos]].type_code == kPhenoDtypeCc) {
+        any_cc = 1;
+        break;
+      }
+    }
+    const uint32_t keep_mask = BestPgsKeepMask(
+        no_na, any_cc, prevalence >= 0.0);
+
     for (uint32_t pi_pos = 0; pi_pos != usable_pheno_ct; ++pi_pos) {
       const uint32_t pi = usable_pheno_idxs[pi_pos];
       const PhenoCol* the_pheno = &pheno_cols[pi];
@@ -2924,7 +3037,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                                   covar_names_arr, pheno_name, type_code,
                                   prevalence, fold_ct, fold_seed,
                                   pair_keep_idxs, keep_ct, &outfile,
-                                  outname, outname_end, pheno_rows);
+                                  outname, outname_end, pheno_rows, keep_mask);
       if (unlikely(reterr)) {
         free(score_block);
         free(covar_names_arr);
@@ -3149,7 +3262,8 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
                          double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                         uint32_t corr_matrix, const char* pairs_fname,
+                         uint32_t corr_matrix, uint32_t no_na,
+                         const char* pairs_fname,
                          char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
   PgsPhenoPairs pairs;
@@ -4418,6 +4532,18 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       }
     }
 
+    // Same pre-pass as the --pfile route: the no-na mask has to be settled
+    // before the first block writes the header.  kPhenoDtypeCat marks a
+    // phenotype ValidatePhenoBlock rejected, so those do not vote.
+    uint32_t any_cc = 0;
+    for (uint32_t ph = 0; ph != pheno_col_ct; ++ph) {
+      if (pheno_types[ph] == kPhenoDtypeCc) {
+        any_cc = 1;
+        break;
+      }
+    }
+    const uint32_t keep_mask = BestPgsKeepMask(no_na, any_cc, prevalence >= 0.0);
+
     uint32_t out_pheno_pos = 0;
     for (uint32_t ph = 0; ph != pheno_col_ct; ++ph) {
       if (pheno_types[ph] == kPhenoDtypeCat) continue;  // skipped
@@ -4476,7 +4602,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                                   covar_names_arr, pheno_name, type_code,
                                   prevalence, fold_ct, fold_seed,
                                   pair_keep_idxs, keep_ct, &outfile,
-                                  outname, outname_end, pheno_rows);
+                                  outname, outname_end, pheno_rows, keep_mask);
       if (unlikely(reterr)) {
         free(covar_names_arr);
         free(join_pheno_idx);

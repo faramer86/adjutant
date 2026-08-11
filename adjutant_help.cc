@@ -265,7 +265,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
       fputs("\nPGS EVALUATION\n\n", stdout);
     }
     HelpPrint("give-best-pgs\0", &help_ctrl, 1,
-"  --give-best-pgs           Rank scores by how much each adds to a\n"
+"  --give-best-pgs [no-na]   Rank scores by how much each adds to a\n"
 "                            covariates-only null model.  Writes\n"
 "                            <prefix>.best_pgs, one row per (phenotype,\n"
 "                            model), sorted by R2_INCR within each phenotype.\n"
@@ -276,6 +276,12 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "    21 columns; the README has the full reference.  The sort key R2_INCR is\n"
 "    observed-scale for both trait types, not a pseudo-R2 of the logistic fit.\n"
 "    R2L_* need --prevalence; OR and AUC_* are case/control only.\n"
+"\n"
+"    'no-na' omits the columns this run cannot fill, which is 8 of the 21 when\n"
+"    every phenotype is quantitative.  N_CASE, OR and AUC_* go when no\n"
+"    phenotype is case/control; R2L_* go when --prevalence is absent as well.\n"
+"    The rule is the configuration, not the data, so the columns follow from\n"
+"    the command line and a column left empty by a failed fit still appears.\n"
 "\n"
 "    Read the interval before the ranking: over many candidates the winner is\n"
 "    partly the luckiest, and --folds is the answer to that.\n"

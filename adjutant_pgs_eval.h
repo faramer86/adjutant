@@ -312,7 +312,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
                      double prevalence, uint32_t fold_ct, uint64_t fold_seed,
                      uint32_t give_best_pgs, uint32_t corr_matrix,
-                     const char* pairs_fname,
+                     uint32_t no_na, const char* pairs_fname,
                      char* outname, char* outname_end);
 
 // --sscore standalone input mode: read a user-supplied .sscore, phenotype
@@ -332,7 +332,8 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
                          double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                         uint32_t corr_matrix, const char* pairs_fname,
+                         uint32_t corr_matrix, uint32_t no_na,
+                         const char* pairs_fname,
                          char* outname, char* outname_end);
 
 #ifdef __cplusplus
