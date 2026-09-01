@@ -59,7 +59,7 @@ no `-DNDEBUG` — while `make release` adds both. A green gate is therefore
 evidence about the unoptimised binary, and says nothing about the optimised one
 beyond what they share. Run the suites and the sweep again against the actual
 `make release` output before copying it here. The two are easy to tell apart by
-size: the release build is 1,314,248 bytes, the gate's is 1,449,656.
+size: the release build is 1,314,168 bytes, the gate's is 1,449,624.
 
 `make release` is reproducible — two clean builds of `b2f71f8` gave the same
 SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
@@ -100,7 +100,7 @@ gcc and OpenBLAS rather than clang and Accelerate.
 
 The disagreement is confined to cells whose value is **itself numerically zero**.
 Re-measured at every release, across the six `.sscore` outputs of the sweep:
-**49 of 15,000 numeric cells** differ, by at most **4.16e-18**, and the largest
+**49 of 16,000 numeric cells** differ, by at most **4.16e-18**, and the largest
 value appearing in any differing cell is **1.04e-17**. Those are columns where
 the score cancels and only rounding residue survives — against scores of order
 0.1 they are zero. Every meaningful digit of every other field matches, and the
