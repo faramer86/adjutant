@@ -365,6 +365,7 @@ typedef struct Plink2CmdlineStruct {
   double min_maf;
   double max_maf;
   double pgs_prevalence; // < 0 means not supplied
+  const char* pgs_cols_spec;  // --give-best-pgs cols=; nullptr means default
   uint64_t min_allele_ddosage;
   uint64_t max_allele_ddosage;
   int32_t missing_pheno;
@@ -1998,6 +1999,7 @@ PglErr Plink2Core(const Plink2Cmdline* pcp, MakePlink2Flags make_plink2_flags, c
                                  pcp->pgs_prevalence,
                                  give_best_pgs, corr_matrix,
                                  (pcp->score_info.flags / kfScoreBestPgsNoNa) & 1,
+                                 pcp->pgs_cols_spec,
                                  pcp->pgs_pheno_pairs_fname,
                                  outname, outname_end);
           if (unlikely(reterr)) {
@@ -2283,6 +2285,7 @@ int main(int argc, char** argv) {
     pc.min_maf = 0.0;
     pc.max_maf = 1.0;
     pc.pgs_prevalence = -1.0;  // < 0 means not supplied
+    pc.pgs_cols_spec = nullptr;
     pc.min_allele_ddosage = 0;
     pc.max_allele_ddosage = (~0LLU);
     pc.var_min_qual = -1;
@@ -2506,11 +2509,22 @@ int main(int argc, char** argv) {
           }
           if (param_ct) {
             const char* modif = argvk[arg_idx + 1];
-            if (unlikely(!strequal_k(modif, "no-na", strlen(modif)))) {
-              snprintf(g_logbuf, kLogbufSize, "Error: Invalid --give-best-pgs argument '%s'; 'no-na' is the only one accepted.\n", modif);
+            const uint32_t modif_slen = strlen(modif);
+            if (strequal_k(modif, "no-na", modif_slen)) {
+              pc.score_info.flags |= kfScoreBestPgsNoNa;
+            } else if (StrStartsWith(modif, "cols=", modif_slen)) {
+              // Validated here rather than at write time: naming a column
+              // wrong should cost a parse error, not a loaded .pgen.
+              uint32_t tmp_order[64];
+              uint32_t tmp_ct;
+              if (unlikely(BestPgsParseColSpec(&(modif[5]), tmp_order, &tmp_ct, g_logbuf))) {
+                goto main_ret_INVALID_CMDLINE_WWA;
+              }
+              pc.pgs_cols_spec = &(modif[5]);
+            } else {
+              snprintf(g_logbuf, kLogbufSize, "Error: Invalid --give-best-pgs argument '%s'; expected 'no-na' or 'cols=<names>'.\n", modif);
               goto main_ret_INVALID_CMDLINE_WWA;
             }
-            pc.score_info.flags |= kfScoreBestPgsNoNa;
           }
           pc.score_info.flags |= kfScoreGiveBestPgs;
           pc.dependency_flags |= kfFilterPsamReq;
@@ -3448,6 +3462,7 @@ int main(int argc, char** argv) {
                                  pc.pgs_prevalence,
                                  (pc.score_info.flags / kfScoreGiveCorrMatrix) & 1,
                                  (pc.score_info.flags / kfScoreBestPgsNoNa) & 1,
+                                 pc.pgs_cols_spec,
                                  pc.pgs_pheno_pairs_fname,
                                  outname, outname_end);
       goto main_ret_1;

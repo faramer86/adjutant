@@ -188,6 +188,14 @@ void IncrR2CiFromRTest(double rr, double r2_null, uint32_t sample_ct,
 // ScoreReport so a misconfigured run fails in a second rather than after the
 // scoring pass.  BestPgsReport still calls it, so the unit stays correct if
 // used standalone.
+// Parses a comma-separated .best_pgs column-name list into 0-based column
+// indices, in the order given.  `order` must hold at least 20 entries.
+// Returns 1 and fills errbuf (kLogbufSize bytes) on an unknown name, a
+// repeated one, or an empty field.  Exposed so --give-best-pgs cols= can be
+// rejected at parse time rather than after the genotypes have loaded.
+BoolErr BestPgsParseColSpec(const char* spec, uint32_t* order,
+                            uint32_t* order_ct_ptr, char* errbuf);
+
 PglErr BestPgsValidate(const uintptr_t* sample_include, uint32_t sample_ct,
                        const PhenoCol* pheno_cols, const char* pheno_names,
                        uintptr_t max_pheno_name_blen, uint32_t pheno_ct,
@@ -266,7 +274,8 @@ PglErr BestPgsReport(const char* sscore_fname,
                      const PhenoCol* covar_cols, const char* covar_names,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
                      double prevalence, uint32_t give_best_pgs, uint32_t corr_matrix,
-                     uint32_t no_na, const char* pairs_fname,
+                     uint32_t no_na, const char* cols_spec,
+                     const char* pairs_fname,
                      char* outname, char* outname_end);
 
 // --sscore standalone input mode: read a user-supplied .sscore, phenotype
@@ -286,7 +295,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
                          double prevalence, uint32_t corr_matrix, uint32_t no_na,
-                         const char* pairs_fname,
+                         const char* cols_spec, const char* pairs_fname,
                          char* outname, char* outname_end);
 
 #ifdef __cplusplus

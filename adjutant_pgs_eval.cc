@@ -970,23 +970,22 @@ void PgsEvalLogisticOne(PgsEvalLogisticCtx* ctx, const double* gg,
 // BestPgsReport: read back .sscore, rank by incremental R², write .best_pgs
 // ---------------------------------------------------------------------------
 
-// The .best_pgs column layout, in one place.  20 columns:
-//   1 PGS_ID  2 PHENO  3 TYPE  4 N  5 N_CASE
-//   6 BETA  7 OR  8 SE  9 P  10 R2_NULL  11 R2_FULL
-//   12 R2_INCR  13 R2_INCR_L95  14 R2_INCR_U95
-//   15 R2L_INCR  16 R2L_INCR_L95  17 R2L_INCR_U95
-//   18 AUC_NULL  19 AUC_FULL  20 AUC_INCR
-// pgs_eval_check.sh Case 0 asserts this string exactly, and every other case
-// there indexes by column number, so the two move together or not at all.
-static const char kBestPgsHeader[] =
-    "#PGS_ID\tPHENO\tTYPE\tN\tN_CASE\tBETA\tOR\tSE\tP\tR2_NULL\tR2_FULL\t"
-    "R2_INCR\tR2_INCR_L95\tR2_INCR_U95\tR2L_INCR\tR2L_INCR_L95\tR2L_INCR_U95\t"
-    "AUC_NULL\tAUC_FULL\tAUC_INCR\n";
+// The .best_pgs column layout, in one place: this table.  The header line and
+// every name lookup are derived from it, so there is no second description of
+// the layout that can drift out of step with it.  pgs_eval_check.sh Case 0
+// pins the emitted header exactly.
+static const char* const kBestPgsColNames[] = {
+  "PGS_ID", "PHENO", "TYPE", "N", "N_CASE",
+  "BETA", "OR", "SE", "P", "R2_NULL", "R2_FULL",
+  "R2_INCR", "R2_INCR_L95", "R2_INCR_U95",
+  "R2L_INCR", "R2L_INCR_L95", "R2L_INCR_U95",
+  "AUC_NULL", "AUC_FULL", "AUC_INCR"
+};
 
-// 0-based .best_pgs column indices, for the no-na mask below.  Named rather
-// than written as literals because the mask is the one place outside the
-// header string that has to agree with the layout.
+// 0-based indices the no-na rule names.  Only the columns it reasons about
+// need a constant; the rest are addressed through the table above.
 enum {
+  kBestPgsColCt = 20,
   kBestPgsColNCase = 4,
   kBestPgsColOr = 6,
   kBestPgsColR2lIncr = 14,
@@ -994,89 +993,157 @@ enum {
   kBestPgsColR2lU95 = 16,
   kBestPgsColAucNull = 17,
   kBestPgsColAucFull = 18,
-  kBestPgsColAucIncr = 19,
-  kBestPgsColCt = 20
+  kBestPgsColAucIncr = 19
 };
 
-// Which .best_pgs columns the run can actually fill.  All 20 bits unless
-// --give-best-pgs no-na is given, in which case the columns a configuration
-// cannot populate are dropped:
-//   - the case/control columns, when no phenotype is binary
-//   - the liability columns, additionally when --prevalence is absent
+// The columns to emit, in the order to emit them.  Everything downstream --
+// the header, every data row -- is written from one of these, so the layout is
+// decided once per run and never re-derived.
 //
-// Structural rather than empirical: the header is written on the first
-// phenotype block, long before the last phenotype has been fitted, so "every
-// value in this column came out NA" is not a question this writer can answer
-// without holding every row for every phenotype in memory.  Deciding from the
-// configuration also keeps the layout reproducible from the command line, so
-// one extra fit converging cannot change the shape of the file.
-static uint32_t BestPgsKeepMask(uint32_t no_na, uint32_t any_cc, uint32_t has_prevalence) {
-  const uint32_t all = (1U << kBestPgsColCt) - 1;
-  if (!no_na) {
-    return all;
+// Default: all 20 in canonical order.
+//
+// no-na: drops the columns the run's configuration cannot fill -- the
+// case/control ones when no phenotype is binary, the liability ones when
+// --prevalence is absent as well.  Structural rather than empirical, because
+// the header goes out on the first phenotype block, long before the last
+// phenotype has been fitted; "every value in this column came out NA" is not a
+// question this writer can answer without holding every row in memory.
+// Deciding from the configuration also keeps the layout reproducible from the
+// command line, so one extra fit converging cannot change the file's shape.
+static void BestPgsDefaultOrder(uint32_t no_na, uint32_t any_cc,
+                                uint32_t has_prevalence, uint32_t* order,
+                                uint32_t* order_ct_ptr) {
+  const uint32_t drop_cc = no_na && (!any_cc);
+  const uint32_t drop_r2l = no_na && ((!any_cc) || (!has_prevalence));
+  uint32_t ct = 0;
+  for (uint32_t ii = 0; ii != kBestPgsColCt; ++ii) {
+    if (drop_cc && ((ii == kBestPgsColNCase) || (ii == kBestPgsColOr) ||
+                    (ii == kBestPgsColAucNull) || (ii == kBestPgsColAucFull) ||
+                    (ii == kBestPgsColAucIncr))) {
+      continue;
+    }
+    if (drop_r2l && ((ii == kBestPgsColR2lIncr) || (ii == kBestPgsColR2lL95) ||
+                     (ii == kBestPgsColR2lU95))) {
+      continue;
+    }
+    order[ct++] = ii;
   }
-  uint32_t mask = all;
-  if (!any_cc) {
-    mask &= ~((1U << kBestPgsColNCase) | (1U << kBestPgsColOr) |
-              (1U << kBestPgsColAucNull) | (1U << kBestPgsColAucFull) |
-              (1U << kBestPgsColAucIncr));
-  }
-  if ((!any_cc) || (!has_prevalence)) {
-    mask &= ~((1U << kBestPgsColR2lIncr) | (1U << kBestPgsColR2lL95) |
-              (1U << kBestPgsColR2lU95));
-  }
-  return mask;
+  *order_ct_ptr = ct;
 }
 
-// Drops the fields whose bit is clear from a tab-separated line, in place,
-// returning the new length.  A trailing newline is preserved.
-//
-// The header and every data row go through this one call with the same mask,
-// which is the point: the layout is described in exactly two places -- the
-// header string and this mask -- and never re-derived per row.  The note above
-// records what the alternative costs.  Teaching the four positional row-writing
-// paths to skip columns would have given each of them its own opinion about the
-// layout, and that is the shape of the bug that let unconverged rows emit 15
-// fields against 16 names undetected.
-static uint32_t CompactMaskedFields(char* line, uint32_t line_len, uint32_t keep_mask) {
-  const uint32_t all = (1U << kBestPgsColCt) - 1;
-  if (keep_mask == all) {
-    return line_len;
+BoolErr BestPgsParseColSpec(const char* spec, uint32_t* order,
+                            uint32_t* order_ct_ptr, char* errbuf) {
+  uint32_t ct = 0;
+  uint32_t seen[kBestPgsColCt];
+  for (uint32_t ii = 0; ii != kBestPgsColCt; ++ii) {
+    seen[ii] = 0;
   }
+  const char* rp = spec;
+  while (1) {
+    const char* end = rp;
+    while ((*end != ',') && (*end != '\0')) {
+      ++end;
+    }
+    const uintptr_t slen = S_CAST(uintptr_t, end - rp);
+    if (!slen) {
+      snprintf(errbuf, kLogbufSize, "Error: --give-best-pgs cols=: empty column name.\n");
+      return 1;
+    }
+    uint32_t found = kBestPgsColCt;
+    for (uint32_t ii = 0; ii != kBestPgsColCt; ++ii) {
+      if ((strlen(kBestPgsColNames[ii]) == slen) &&
+          memequal(kBestPgsColNames[ii], rp, slen)) {
+        found = ii;
+        break;
+      }
+    }
+    if (found == kBestPgsColCt) {
+      snprintf(errbuf, kLogbufSize, "Error: --give-best-pgs cols=: '%.*s' is not a .best_pgs column. Valid names: %s ... %s (see --help give-best-pgs).\n",
+               S_CAST(int, slen), rp, kBestPgsColNames[0],
+               kBestPgsColNames[kBestPgsColCt - 1]);
+      return 1;
+    }
+    if (seen[found]) {
+      snprintf(errbuf, kLogbufSize, "Error: --give-best-pgs cols=: '%s' named more than once.\n",
+               kBestPgsColNames[found]);
+      return 1;
+    }
+    seen[found] = 1;
+    order[ct++] = found;
+    if (*end == '\0') {
+      break;
+    }
+    rp = &(end[1]);
+  }
+  *order_ct_ptr = ct;
+  return 0;
+}
+
+// Writes the header for one column order.  Derived from the same table and the
+// same order the rows use, so a column cannot be named here and filled from a
+// different slot there.
+static char* BestPgsWriteHeader(const uint32_t* order, uint32_t order_ct, char* wp) {
+  *wp++ = '#';
+  for (uint32_t ii = 0; ii != order_ct; ++ii) {
+    if (ii) {
+      *wp++ = '\t';
+    }
+    wp = strcpya(wp, kBestPgsColNames[order[ii]]);
+  }
+  *wp++ = '\n';
+  return wp;
+}
+
+// Rewrites a canonical 20-field row as the fields named by order[0..order_ct),
+// in that order, into `out`.  A reorder cannot be done in place, so the
+// destination is separate.  Returns the new length.
+//
+// The header and every data row are built from the same order array, which is
+// the point: teaching the four positional row-writing paths to select columns
+// themselves would have given each its own opinion about the layout, and that
+// is the shape of the bug that let unconverged rows emit 15 fields against 16
+// names undetected.
+static uint32_t BestPgsSelectFields(const char* line, uint32_t line_len,
+                                    const uint32_t* order, uint32_t order_ct,
+                                    char* out) {
+  const char* starts[kBestPgsColCt];
+  uint32_t lens[kBestPgsColCt];
   uint32_t nl = 0;
   if (line_len && (line[line_len - 1] == '\n')) {
     nl = 1;
     --line_len;
   }
-  char* wp = line;
   const char* rp = line;
   const char* line_end = &(line[line_len]);
-  uint32_t col_idx = 0;
-  uint32_t written = 0;
-  while (1) {
+  uint32_t col_ct = 0;
+  while (col_ct != kBestPgsColCt) {
     const char* field_end = rp;
     while ((field_end != line_end) && (*field_end != '\t')) {
       ++field_end;
     }
-    if (keep_mask & (1U << col_idx)) {
-      if (written) {
-        *wp++ = '\t';
-      }
-      const uintptr_t flen = S_CAST(uintptr_t, field_end - rp);
-      memmove(wp, rp, flen);
-      wp = &(wp[flen]);
-      ++written;
-    }
+    starts[col_ct] = rp;
+    lens[col_ct] = S_CAST(uint32_t, field_end - rp);
+    ++col_ct;
     if (field_end == line_end) {
       break;
     }
     rp = &(field_end[1]);
-    ++col_idx;
+  }
+  char* wp = out;
+  for (uint32_t ii = 0; ii != order_ct; ++ii) {
+    if (ii) {
+      *wp++ = '\t';
+    }
+    const uint32_t ci = order[ii];
+    if (ci < col_ct) {
+      memcpy(wp, starts[ci], lens[ci]);
+      wp = &(wp[lens[ci]]);
+    }
   }
   if (nl) {
     *wp++ = '\n';
   }
-  return S_CAST(uint32_t, wp - line);
+  return S_CAST(uint32_t, wp - out);
 }
 
 // Columns 6..20, i.e. everything an unconverged row has nothing to say about.
@@ -1158,7 +1225,8 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
                                   const uint32_t* keep_idxs, uint32_t keep_ct,
                                   FILE** outfile_ptr,
                                   char* outname, char* outname_end,
-                                  BestPgsRow* pheno_rows, uint32_t keep_mask) {
+                                  BestPgsRow* pheno_rows,
+                                  const uint32_t* order, uint32_t order_ct) {
   PglErr reterr = kPglRetSuccess;
   const uint32_t fit_ct = keep_idxs? keep_ct : score_col_ct;
   if (!fit_ct) {
@@ -1270,10 +1338,9 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
       return kPglRetOpenFail;
     }
 
-    char hdr_buf[sizeof(kBestPgsHeader)];
-    memcpy(hdr_buf, kBestPgsHeader, sizeof(kBestPgsHeader));
-    const uint32_t hdr_len = CompactMaskedFields(
-        hdr_buf, S_CAST(uint32_t, sizeof(kBestPgsHeader) - 1), keep_mask);
+    char hdr_buf[512];
+    const uint32_t hdr_len = S_CAST(uint32_t,
+        BestPgsWriteHeader(order, order_ct, hdr_buf) - hdr_buf);
     if (unlikely(fwrite(hdr_buf, hdr_len, 1, *outfile_ptr) != 1)) {
       return kPglRetWriteFail;
     }
@@ -1307,10 +1374,15 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
         max_name_slen = sc_slen;
       }
     }
-    char* wbuf = S_CAST(char*, malloc(2 * max_name_slen + 512));
+    // Two buffers of the same size: the canonical 20-field row is built in the
+    // first, then selected into the second.  A reorder cannot be done in place,
+    // and the selection never grows a row -- no column is emitted twice.
+    const uintptr_t row_blen = 2 * max_name_slen + 512;
+    char* wbuf = S_CAST(char*, malloc(2 * row_blen));
     if (unlikely(!wbuf)) {
       return kPglRetNomem;
     }
+    char* obuf = &(wbuf[row_blen]);
     for (uint32_t ki = 0; ki != fit_ct; ++ki) {
       const BestPgsRow* rr = &pheno_rows[ki];
       char* wp = wbuf;
@@ -1395,9 +1467,9 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
 
       *wp++ = '\n';
 
-      const uint32_t line_len = CompactMaskedFields(
-          wbuf, S_CAST(uint32_t, wp - wbuf), keep_mask);
-      if (unlikely(fwrite(wbuf, line_len, 1, *outfile_ptr) != 1)) {
+      const uint32_t line_len = BestPgsSelectFields(
+          wbuf, S_CAST(uint32_t, wp - wbuf), order, order_ct, obuf);
+      if (unlikely(fwrite(obuf, line_len, 1, *outfile_ptr) != 1)) {
         free(wbuf);
         return kPglRetWriteFail;
       }
@@ -2143,7 +2215,8 @@ PglErr BestPgsReport(const char* sscore_fname,
                      const PhenoCol* covar_cols, const char* covar_names,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
                      double prevalence, uint32_t give_best_pgs, uint32_t corr_matrix,
-                     uint32_t no_na, const char* pairs_fname,
+                     uint32_t no_na, const char* cols_spec,
+                     const char* pairs_fname,
                      char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
   PgsPhenoPairs pairs;
@@ -2546,8 +2619,21 @@ PglErr BestPgsReport(const char* sscore_fname,
         break;
       }
     }
-    const uint32_t keep_mask = BestPgsKeepMask(
-        no_na, any_cc, prevalence >= 0.0);
+    // cols= wins outright when given: the point of naming columns is to fix
+    // their positions, so no-na must not move them afterwards.  The two are
+    // mutually exclusive at parse time anyway.
+    uint32_t order[kBestPgsColCt];
+    uint32_t order_ct;
+    if (cols_spec) {
+      char errbuf[kLogbufSize];
+      if (unlikely(BestPgsParseColSpec(cols_spec, order, &order_ct, errbuf))) {
+        logerrputs(errbuf);
+        reterr = kPglRetInvalidCmdline;
+        goto BestPgsReport_ret_1;
+      }
+    } else {
+      BestPgsDefaultOrder(no_na, any_cc, prevalence >= 0.0, order, &order_ct);
+    }
 
     for (uint32_t pi_pos = 0; pi_pos != usable_pheno_ct; ++pi_pos) {
       const uint32_t pi = usable_pheno_idxs[pi_pos];
@@ -2585,7 +2671,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                                   covar_names_arr, pheno_name, type_code,
                                   prevalence,
                                   pair_keep_idxs, keep_ct, &outfile,
-                                  outname, outname_end, pheno_rows, keep_mask);
+                                  outname, outname_end, pheno_rows, order, order_ct);
       if (unlikely(reterr)) {
         free(score_block);
         free(covar_names_arr);
@@ -2808,7 +2894,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
                          double prevalence, uint32_t corr_matrix, uint32_t no_na,
-                         const char* pairs_fname,
+                         const char* cols_spec, const char* pairs_fname,
                          char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
   PgsPhenoPairs pairs;
@@ -4081,7 +4167,21 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
         break;
       }
     }
-    const uint32_t keep_mask = BestPgsKeepMask(no_na, any_cc, prevalence >= 0.0);
+    // cols= wins outright when given: the point of naming columns is to fix
+    // their positions, so no-na must not move them afterwards.  The two are
+    // mutually exclusive at parse time anyway.
+    uint32_t order[kBestPgsColCt];
+    uint32_t order_ct;
+    if (cols_spec) {
+      char errbuf[kLogbufSize];
+      if (unlikely(BestPgsParseColSpec(cols_spec, order, &order_ct, errbuf))) {
+        logerrputs(errbuf);
+        reterr = kPglRetInvalidCmdline;
+        goto BestPgsFromSscore_ret_1;
+      }
+    } else {
+      BestPgsDefaultOrder(no_na, any_cc, prevalence >= 0.0, order, &order_ct);
+    }
 
     uint32_t out_pheno_pos = 0;
     for (uint32_t ph = 0; ph != pheno_col_ct; ++ph) {
@@ -4141,7 +4241,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                                   covar_names_arr, pheno_name, type_code,
                                   prevalence,
                                   pair_keep_idxs, keep_ct, &outfile,
-                                  outname, outname_end, pheno_rows, keep_mask);
+                                  outname, outname_end, pheno_rows, order, order_ct);
       if (unlikely(reterr)) {
         free(covar_names_arr);
         free(join_pheno_idx);

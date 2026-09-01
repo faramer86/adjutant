@@ -265,7 +265,8 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
       fputs("\nPGS EVALUATION\n\n", stdout);
     }
     HelpPrint("give-best-pgs\0", &help_ctrl, 1,
-"  --give-best-pgs [no-na]   Rank scores by how much each adds to a\n"
+"  --give-best-pgs [no-na | cols=<names>]\n"
+"                            Rank scores by how much each adds to a\n"
 "                            covariates-only null model.  Writes\n"
 "                            <prefix>.best_pgs, one row per (phenotype,\n"
 "                            model), sorted by R2_INCR within each phenotype.\n"
@@ -282,6 +283,15 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "    phenotype is case/control; R2L_* go when --prevalence is absent as well.\n"
 "    The rule is the configuration, not the data, so the columns follow from\n"
 "    the command line and a column left empty by a failed fit still appears.\n"
+"\n"
+"    'cols=' names the columns to emit, comma-separated, and emits them in the\n"
+"    order named -- e.g. cols=PGS_ID,PHENO,R2_INCR,P.  That is the way to make\n"
+"    a positional parser safe: you fix the positions, so nothing a later\n"
+"    version adds or removes can move them.  An unknown or repeated name is a\n"
+"    parse error.  The names are the header ones without the leading '#':\n"
+"      PGS_ID PHENO TYPE N N_CASE BETA OR SE P R2_NULL R2_FULL R2_INCR\n"
+"      R2_INCR_L95 R2_INCR_U95 R2L_INCR R2L_INCR_L95 R2L_INCR_U95\n"
+"      AUC_NULL AUC_FULL AUC_INCR\n"
 "\n"
 "    Read the interval before the ranking.  Over many candidates the winner is\n"
 "    partly the luckiest, and R2_INCR_L95/U95 describe a model chosen in\n"

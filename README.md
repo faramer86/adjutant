@@ -93,6 +93,7 @@ See [example/README.md](example/README.md) for how they were made.
 - **[Chosen pairs only](#4-evaluate-only-certain-pairs)** — Restrict evaluation to named (phenotype, model) pairs instead of the full cross-product (`--pgs-pheno-pairs`).
 - **[One PGS, every trait](#5-evaluate-single-pgs-against-all-of-the-phenotypes)** — Evaluate a score against every phenotype in the file by omitting `--pheno-name`.
 - **[Reuse a score matrix](#6-use-a-score-matrix-you-already-have)** — Evaluate scores computed earlier, without reading genotypes again (`--sscore`).
+- **[Pin the columns](#8-pin-the-columns-and-their-positions)** — Name the `.best_pgs` columns and their order, so a position-based parser stays correct across versions (`--give-best-pgs cols=`).
 - **[Trim empty columns](#7-drop-the-columns-your-run-cannot-fill)** — Omit the `.best_pgs` columns a run cannot fill, which is 8 of 20 when every phenotype is quantitative (`--give-best-pgs no-na`).
 
 **[III. Harmonisation](#iii-harmonisation)** — weights + a `.bim` → `.matched`
@@ -343,6 +344,38 @@ converge is therefore kept.
 One binary phenotype anywhere keeps the case/control columns for every row,
 including the quantitative ones, where they stay `NA`. A column set that varied
 from row to row would not be a table.
+
+### 8) Pin the columns, and their positions
+
+`no-na` decides the layout for you, which is convenient to read and awkward to
+parse: the column set depends on the run. `cols=` inverts that — you name the
+columns and they come out in the order you named them:
+
+```sh
+adjutant --sscore result.sscore --pheno pheno.txt --covar covar.txt \
+         --give-best-pgs cols=PGS_ID,PHENO,R2_INCR,P --out ranked
+```
+
+| PGS_ID | PHENO | R2_INCR | P |
+|---|---|---|---|
+| PGS_B | HEIGHT | 0.171924 | 7.77127e-14 |
+
+**This is how to make a positional parser safe.** `$3` is `R2_INCR` because you
+put it there, and no future version of adjutant can move it — adding a column
+changes the default layout, never a named one. Without `cols=`, index by name
+off the header line instead; `.best_pgs` has lost and gained columns before and
+will again.
+
+An unknown or repeated name is a parse error, raised before any genotype is
+read. The names are the header's, without the leading `#`:
+
+```
+PGS_ID PHENO TYPE N N_CASE BETA OR SE P R2_NULL R2_FULL
+R2_INCR R2_INCR_L95 R2_INCR_U95 R2L_INCR R2L_INCR_L95 R2L_INCR_U95
+AUC_NULL AUC_FULL AUC_INCR
+```
+
+`cols=` and `no-na` are alternatives; give one or the other.
 
 ---
 
