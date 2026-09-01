@@ -132,8 +132,7 @@ static void Residualize(const PgsEvalOlsCtx* ctx, const double* vv,
   }
 }
 
-// Null every pointer PgsEvalOlsCleanup frees, and set fold_ct to the "no
-// cross-validation" value PgsEvalOlsSetFolds overwrites.
+// Null every pointer PgsEvalOlsCleanup frees.
 //
 // Both Inits need this, and PgsEvalLogisticInit needs it on its embedded
 // context before its own failure returns, which happen before PgsEvalOlsInit
@@ -144,12 +143,6 @@ static void PgsEvalOlsPreinit(PgsEvalOlsCtx* ctx) {
   ctx->xtx_inv = nullptr;
   ctx->e_y = nullptr;
   ctx->work = nullptr;
-  ctx->fold_assign = nullptr;
-  ctx->fold_xtx_inv = nullptr;
-  ctx->fold_beta = nullptr;
-  ctx->cv_work = nullptr;
-  ctx->fold_ct = 1;
-  ctx->r2_null_oof = 0.0;
 }
 
 BoolErr PgsEvalOlsInit(const double* yy, const double* xx, uint32_t sample_ct,
@@ -208,18 +201,9 @@ void PgsEvalOlsCleanup(PgsEvalOlsCtx* ctx) {
   free(ctx->xtx_inv);
   free(ctx->e_y);
   free(ctx->work);
-  free(ctx->fold_assign);
-  free(ctx->fold_xtx_inv);
-  free(ctx->fold_beta);
-  free(ctx->cv_work);
   ctx->xtx_inv = nullptr;
   ctx->e_y = nullptr;
   ctx->work = nullptr;
-  ctx->fold_assign = nullptr;
-  ctx->fold_xtx_inv = nullptr;
-  ctx->fold_beta = nullptr;
-  ctx->cv_work = nullptr;
-  ctx->fold_ct = 1;
 }
 
 // Analytic 95% CI for the incremental R^2, via the Fisher z transform of the
@@ -245,8 +229,8 @@ void PgsEvalOlsCleanup(PgsEvalOlsCtx* ctx) {
 // everywhere except in the clamped corner below, which ClampCiToPoint then
 // takes care of.  The tests assert containment on every fixture row.
 //
-// Split in two so the cross-validated path can reach the Fisher z machinery
-// with its own partial correlation (see PgsEvalOofR2) without duplicating it.
+// Split in two so a caller holding a partial correlation directly can reach the
+// Fisher z machinery without going back through the dot products.
 static void IncrR2CiFromR(double rr, double r2_null, uint32_t sample_ct,
                           uint32_t predictor_ct, double* lo, double* hi) {
   if (sample_ct <= predictor_ct + 2) {
@@ -277,12 +261,11 @@ static void IncrR2CiFromR(double rr, double r2_null, uint32_t sample_ct,
 // The Fisher z path gives containment for free except in one corner: the
 // |r| < 0.9999999 clamp in IncrR2CiFromR caps the upper bound at
 // tanh(atanh(0.9999999) + 1.96/sqrt(n-p-2))^2 * (1 - R2_null), which a
-// near-perfect fit exceeds (see PgsEvalOofR2 for the exact condition).  Both
-// paths reach that corner; both call this.
+// near-perfect fit exceeds.
 //
 // NaN-safe by construction: both comparisons are false when either side is
-// NaN, so a NaN interval -- too few degrees of freedom, or a negative
-// out-of-fold r2_incr -- stays NaN rather than collapsing onto the estimate.
+// NaN, so a NaN interval -- too few degrees of freedom -- stays NaN rather
+// than collapsing onto the estimate.
 static void ClampCiToPoint(double point, double* lo, double* hi) {
   if (*lo > point) { *lo = point; }
   if (*hi < point) { *hi = point; }
@@ -300,324 +283,8 @@ static void IncrR2Ci(double gy_dot, double gg_dot, double eyey_dot,
   IncrR2CiFromR(gy_dot / denom, r2_null, sample_ct, predictor_ct, lo, hi);
 }
 
-// ---------------------------------------------------------------------------
-// k-fold cross-validation
-// ---------------------------------------------------------------------------
 
-// SplitMix64 (Steele, Lea & Flood 2014).  Self-contained and reproducible from
-// a seed, which is all the fold assignment needs; deliberately not plink2's
-// shared sfmt stream, so drawing folds cannot shift anything else that draws
-// from it.
-static uint64_t SplitMix64(uint64_t* state) {
-  uint64_t zz = (*state += 0x9e3779b97f4a7c15ULL);
-  zz = (zz ^ (zz >> 30)) * 0xbf58476d1ce4e5b9ULL;
-  zz = (zz ^ (zz >> 27)) * 0x94d049bb133111ebULL;
-  return zz ^ (zz >> 31);
-}
 
-// Shuffle idxs[0, ct) (Fisher-Yates), then deal folds round-robin, so this
-// stratum contributes floor(ct / fold_ct) or ceil(ct / fold_ct) samples to
-// every fold.  Called once per stratum off a single PRNG stream.
-static void AssignFoldsInStratum(uint32_t* idxs, uint32_t ct, uint32_t fold_ct,
-                                 uint64_t* rng, uint32_t* fold_assign) {
-  for (uint32_t ii = ct; ii > 1; --ii) {
-    // Modulo on a full 64-bit draw.  Any one outcome's probability differs
-    // from 1/ii by at most ii / 2^64, so at the largest ii a uint32_t sample
-    // count can reach the bias is under 2^-32 -- far below the granularity of
-    // the fold sizes it would have to move.
-    const uint32_t jj = S_CAST(uint32_t, SplitMix64(rng) % ii);
-    const uint32_t tmp = idxs[ii - 1];
-    idxs[ii - 1] = idxs[jj];
-    idxs[jj] = tmp;
-  }
-  for (uint32_t ii = 0; ii != ct; ++ii) {
-    fold_assign[idxs[ii]] = ii % fold_ct;
-  }
-}
-
-BoolErr PgsEvalOlsSetFolds(PgsEvalOlsCtx* ctx, uint32_t fold_ct,
-                           uint32_t stratify_binary, uint64_t seed) {
-  if (fold_ct <= 1) {
-    return 0;  // no cross-validation; ctx stays exactly as PgsEvalOlsInit left it
-  }
-  const uint32_t sample_ct = ctx->sample_ct;
-  const uint32_t predictor_ct = ctx->predictor_ct;
-  const double* yy = ctx->yy;
-  const double* xx = ctx->xx;
-
-  ctx->fold_assign = S_CAST(uint32_t*, malloc(sample_ct * sizeof(uint32_t)));
-  ctx->fold_xtx_inv = S_CAST(double*, malloc(
-      (uintptr_t)fold_ct * predictor_ct * predictor_ct * sizeof(double)));
-  ctx->fold_beta = S_CAST(double*, malloc(
-      (uintptr_t)fold_ct * predictor_ct * sizeof(double)));
-  ctx->cv_work = S_CAST(double*, malloc(
-      (3 * (uintptr_t)sample_ct + 2 * predictor_ct) * sizeof(double)));
-  uint32_t* strat_idx = S_CAST(uint32_t*, malloc(sample_ct * sizeof(uint32_t)));
-  // Sized for predictor_ct; the MAXV(., 3) is load-bearing because dpocon
-  // inside InvertSymmdefMatrixChecked needs a 3*N work vector.
-  MatrixInvertBuf1* inv_buf = S_CAST(MatrixInvertBuf1*,
-      malloc(kMatrixInvertBuf1CheckedAlloc * predictor_ct));
-  double* dbl_2d_buf = S_CAST(double*, malloc(
-      (uintptr_t)predictor_ct * MAXV(predictor_ct, 3) * sizeof(double)));
-  if ((!ctx->fold_assign) || (!ctx->fold_xtx_inv) || (!ctx->fold_beta) ||
-      (!ctx->cv_work) || (!strat_idx) || (!inv_buf) || (!dbl_2d_buf)) {
-    free(strat_idx); free(inv_buf); free(dbl_2d_buf);
-    return 1;  // PgsEvalOlsCleanup frees whatever did get allocated
-  }
-
-  {
-    uint64_t rng = seed;
-    if (stratify_binary) {
-      // Controls, then cases, off one stream.  Without the split, a fold of an
-      // imbalanced phenotype can come out with almost no cases, and the R^2 of
-      // a fit on that fold means nothing.
-      for (uint32_t pass = 0; pass != 2; ++pass) {
-        uint32_t ct = 0;
-        for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-          if ((yy[ii] > 0.5) == (pass == 1)) {
-            strat_idx[ct++] = ii;
-          }
-        }
-        AssignFoldsInStratum(strat_idx, ct, fold_ct, &rng, ctx->fold_assign);
-      }
-    } else {
-      for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-        strat_idx[ii] = ii;
-      }
-      AssignFoldsInStratum(strat_idx, sample_ct, fold_ct, &rng, ctx->fold_assign);
-    }
-  }
-
-  // Per training set: factor X'X, fit the null model, and predict into the
-  // held-out fold.  None of this depends on the PGS column, so it is paid once
-  // for the whole model list rather than once per model.
-  double* resid_null = ctx->cv_work;
-  double* xty = &(ctx->cv_work[3 * (uintptr_t)sample_ct]);
-  for (uint32_t ff = 0; ff != fold_ct; ++ff) {
-    double* xtx = &(ctx->fold_xtx_inv[(uintptr_t)ff * predictor_ct * predictor_ct]);
-    double* beta = &(ctx->fold_beta[(uintptr_t)ff * predictor_ct]);
-    uint32_t train_ct = 0;
-    for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-      if (ctx->fold_assign[ii] != ff) {
-        ++train_ct;
-      }
-    }
-    if (train_ct <= predictor_ct + 1) {
-      free(strat_idx); free(inv_buf); free(dbl_2d_buf);
-      return 1;
-    }
-    for (uint32_t cc = 0; cc != predictor_ct; ++cc) {
-      const double* col_c = &(xx[(uintptr_t)cc * sample_ct]);
-      for (uint32_t rr = 0; rr <= cc; ++rr) {
-        const double* col_r = &(xx[(uintptr_t)rr * sample_ct]);
-        double acc = 0.0;
-        for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-          if (ctx->fold_assign[ii] != ff) {
-            acc += col_r[ii] * col_c[ii];
-          }
-        }
-        xtx[(uintptr_t)cc * predictor_ct + rr] = acc;
-      }
-      double acc = 0.0;
-      for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-        if (ctx->fold_assign[ii] != ff) {
-          acc += col_c[ii] * yy[ii];
-        }
-      }
-      xty[cc] = acc;
-    }
-    if (InvertSymmdefMatrixChecked(predictor_ct, xtx, inv_buf, dbl_2d_buf)) {
-      free(strat_idx); free(inv_buf); free(dbl_2d_buf);
-      return 1;  // e.g. a covariate that happens to be constant on this fold
-    }
-    ReflectMatrix(predictor_ct, xtx);
-    for (uint32_t rr = 0; rr != predictor_ct; ++rr) {
-      double acc = 0.0;
-      for (uint32_t cc = 0; cc != predictor_ct; ++cc) {
-        acc += xtx[(uintptr_t)cc * predictor_ct + rr] * xty[cc];
-      }
-      beta[rr] = acc;
-    }
-    for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-      if (ctx->fold_assign[ii] != ff) {
-        continue;
-      }
-      double eta = 0.0;
-      for (uint32_t kk = 0; kk != predictor_ct; ++kk) {
-        eta += xx[(uintptr_t)kk * sample_ct + ii] * beta[kk];
-      }
-      resid_null[ii] = yy[ii] - eta;
-    }
-  }
-  free(strat_idx);
-  free(inv_buf);
-  free(dbl_2d_buf);
-
-  double ss = 0.0;
-  for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-    ss += resid_null[ii] * resid_null[ii];
-  }
-  ctx->r2_null_oof = (ctx->tss > 0.0) ? (1.0 - ss / ctx->tss) : 0.0;
-  ctx->fold_ct = fold_ct;  // last: a failure above leaves the context in-sample
-  return 0;
-}
-
-// Out-of-fold R^2 family for one PGS column.  Overwrites r2_null / r2_full /
-// r2_incr and the interval on r2_incr; beta / se / pval are left exactly as the
-// whole-sample fit set them.
-//
-// All three R^2 values come from the same pooled set -- every sample predicted
-// once, by the fit that did not see it -- against the same TSS, so
-// r2_incr == r2_full - r2_null holds by construction and not by luck.
-//
-// gmean / gsd are the ones PgsEvalOlsOne already computed, so the standardised
-// column here is the same one the in-sample fit used.
-//
-// Returns 1 if a training set leaves the PGS collinear with the covariates,
-// which the whole-sample fit can pass while a fold does not.
-static BoolErr PgsEvalOofR2(const PgsEvalOlsCtx* ctx, const double* gg,
-                            double gmean, double gsd, PgsEvalResult* result) {
-  const uint32_t sample_ct = ctx->sample_ct;
-  const uint32_t predictor_ct = ctx->predictor_ct;
-  const double* xx = ctx->xx;
-  const double* yy = ctx->yy;
-  const uint32_t* fold_assign = ctx->fold_assign;
-  const double* resid_null = ctx->cv_work;
-  double* incr  = &(ctx->cv_work[sample_ct]);
-  double* g_std = &(ctx->cv_work[2 * (uintptr_t)sample_ct]);
-  double* xtg   = &(ctx->cv_work[3 * (uintptr_t)sample_ct]);
-  double* gamma = &(ctx->cv_work[3 * (uintptr_t)sample_ct + predictor_ct]);
-
-  for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-    g_std[ii] = (gg[ii] - gmean) / gsd;
-  }
-
-  for (uint32_t ff = 0; ff != ctx->fold_ct; ++ff) {
-    const double* xtx_inv = &(ctx->fold_xtx_inv[(uintptr_t)ff * predictor_ct * predictor_ct]);
-    const double* beta_null = &(ctx->fold_beta[(uintptr_t)ff * predictor_ct]);
-    // Frisch-Waugh-Lovell inside the training set: regress the PGS on the
-    // covariates there, then the held-out prediction of the full model is the
-    // held-out prediction of the null model plus beta_g times the same
-    // residualisation evaluated on the held-out rows.  Fitting the full model
-    // outright would give the identical predictions.
-    for (uint32_t kk = 0; kk != predictor_ct; ++kk) {
-      const double* col = &(xx[(uintptr_t)kk * sample_ct]);
-      double acc = 0.0;
-      for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-        if (fold_assign[ii] != ff) {
-          acc += col[ii] * g_std[ii];
-        }
-      }
-      xtg[kk] = acc;
-    }
-    for (uint32_t rr = 0; rr != predictor_ct; ++rr) {
-      double acc = 0.0;
-      for (uint32_t cc = 0; cc != predictor_ct; ++cc) {
-        acc += xtx_inv[(uintptr_t)cc * predictor_ct + rr] * xtg[cc];
-      }
-      gamma[rr] = acc;
-    }
-    double gg_dot = 0.0;
-    double gy_dot = 0.0;
-    uint32_t train_ct = 0;
-    for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-      double e_g = g_std[ii];
-      double eta = 0.0;
-      for (uint32_t kk = 0; kk != predictor_ct; ++kk) {
-        const double xval = xx[(uintptr_t)kk * sample_ct + ii];
-        e_g -= xval * gamma[kk];
-        eta += xval * beta_null[kk];
-      }
-      if (fold_assign[ii] == ff) {
-        incr[ii] = e_g;  // scaled by beta_g below, once it is known
-        continue;
-      }
-      gg_dot += e_g * e_g;
-      gy_dot += e_g * (yy[ii] - eta);
-      ++train_ct;
-    }
-    if (!(gg_dot > 1e-10 * S_CAST(double, train_ct - 1))) {
-      return 1;
-    }
-    const double beta_g = gy_dot / gg_dot;
-    for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-      if (fold_assign[ii] == ff) {
-        incr[ii] *= beta_g;
-      }
-    }
-  }
-
-  double ss_res_full = 0.0;
-  for (uint32_t ii = 0; ii != sample_ct; ++ii) {
-    const double dev = resid_null[ii] - incr[ii];
-    ss_res_full += dev * dev;
-  }
-  result->r2_null = ctx->r2_null_oof;
-  result->r2_full = (ctx->tss > 0.0) ? (1.0 - ss_res_full / ctx->tss) : 0.0;
-  result->r2_incr = result->r2_full - result->r2_null;
-
-  // The interval, from the same Fisher z path as the in-sample one.
-  //
-  // The partial correlation it needs is the one implied by the reported
-  // r2_incr: r = sqrt(r2_incr / (1 - r2_null)).  In-sample that is an identity
-  // -- rearranging it gives r^2 * (1 - R2_null) = r2_incr, the line IncrR2Ci's
-  // containment guarantee rests on -- so this is the same definition, not a
-  // second one, and at fold_ct == 1 it returns the same interval.  (Only |r|
-  // survives, but the interval depends on r only through r^2, so the sign is
-  // not information the output ever carried.)
-  //
-  // Taking r instead as corr(y - yhat_null, yhat_full - yhat_null) directly,
-  // which is the same thing in-sample, does NOT work here.  Write a and b for
-  // those two pooled vectors, s = a.b and q = b.b.  In-sample s == q, because
-  // beta was chosen to make it so; out of fold it is not, and
-  //
-  //     s^2 / (q * TSS)  -  r2_incr  =  (s - q)^2 / (q * TSS)  >=  0
-  //
-  // so the interval would be centred on a quantity strictly above the r2_incr
-  // the row reports, by an amount that grows with how badly the model failed to
-  // generalise.  Containment would then hold only by luck, and the invariant
-  // the whole interval is worth having for is that it never does.
-  //
-  // Here it holds by construction, for the same reason as in-sample: CI(r)
-  // contains r, squaring maps it to an interval bracketing r^2 (with the
-  // straddle-zero rule), and scaling by 1 - r2_null > 0 preserves the order.
-  //
-  // The one crack is the |r| < 0.9999999 clamp inside IncrR2CiFromR, which the
-  // in-sample path shares.  Once r is clamped the upper bound stops tracking
-  // it, so the bound falls below the estimate as soon as
-  //
-  //     r > tanh(atanh(0.9999999) + 1.96 / sqrt(n - p - 2))
-  //
-  // which is 0.99999995 at n = 30 and falls toward 0.9999999 as n grows -- a
-  // residual sum of squares below roughly 1e-7 to 2e-7 of the null's, not the
-  // zero an earlier version of this comment claimed.  A score column equal to
-  // the phenotype plus 1e-5 noise reaches it, which is what handing the tool
-  // the phenotype itself as a model by mistake looks like.  ClampCiToPoint
-  // below closes it on both paths; the unit tests assert containment there at
-  // full precision, which pgs_eval_check.sh cannot (dtoa_g prints ~6 digits).
-  //
-  // A negative r2_incr, which out of fold is a real and meaningful answer (the
-  // PGS predicts held-out samples worse than nothing), has no such r.  Rather
-  // than report an interval on a correlation that does not exist -- necessarily
-  // non-negative, hence excluding the point estimate -- both bounds are NaN and
-  // the writers emit NA.
-  //
-  // APPROXIMATE: out-of-fold predictions from different folds share training
-  // samples, so they are not independent and the nominal 95% is nominal.  The
-  // dependence falls off with fold_ct; it is weak by fold_ct = 5.
-  const double scale = 1.0 - result->r2_null;
-  if ((result->r2_incr < 0.0) || (!(scale > 0.0))) {
-    result->r2_incr_l95 = 0.0 / 0.0;
-    result->r2_incr_u95 = 0.0 / 0.0;
-  } else {
-    IncrR2CiFromR(sqrt(result->r2_incr / scale), result->r2_null,
-                  sample_ct, predictor_ct,
-                  &result->r2_incr_l95, &result->r2_incr_u95);
-    ClampCiToPoint(result->r2_incr, &result->r2_incr_l95,
-                   &result->r2_incr_u95);
-  }
-  return 0;
-}
 
 void PgsEvalOlsOne(const PgsEvalOlsCtx* ctx, const double* gg,
                    PgsEvalResult* result) {
@@ -690,20 +357,10 @@ void PgsEvalOlsOne(const PgsEvalOlsCtx* ctx, const double* gg,
   result->pval = PgsEvalTPval(beta / se, df);
   result->r2_full = (ctx->tss > 0.0) ? (1.0 - rss_full / ctx->tss) : 0.0;
   result->r2_incr = result->r2_full - ctx->r2_null;
-  // Cross-validation replaces the R^2 family and its interval outright, so the
-  // in-sample interval is not computed at all under --folds -- it would be
-  // overwritten unread.  beta, se and pval above stay in-sample either way,
-  // which is the point (see PgsEvalOlsSetFolds).
-  if (ctx->fold_ct > 1) {
-    if (PgsEvalOofR2(ctx, gg, gmean, gsd, result)) {
-      return;  // collinear inside a training set; converged stays 0
-    }
-  } else {
-    IncrR2Ci(gy_dot, gg_dot, ctx->rss_null, ctx->r2_null, sample_ct,
-             predictor_ct, &result->r2_incr_l95, &result->r2_incr_u95);
-    ClampCiToPoint(result->r2_incr, &result->r2_incr_l95,
-                   &result->r2_incr_u95);
-  }
+  IncrR2Ci(gy_dot, gg_dot, ctx->rss_null, ctx->r2_null, sample_ct,
+           predictor_ct, &result->r2_incr_l95, &result->r2_incr_u95);
+  ClampCiToPoint(result->r2_incr, &result->r2_incr_l95,
+                 &result->r2_incr_u95);
   result->converged = 1;
 }
 
@@ -1313,16 +970,16 @@ void PgsEvalLogisticOne(PgsEvalLogisticCtx* ctx, const double* gg,
 // BestPgsReport: read back .sscore, rank by incremental R², write .best_pgs
 // ---------------------------------------------------------------------------
 
-// The .best_pgs column layout, in one place.  21 columns:
-//   1 PGS_ID  2 PHENO  3 TYPE  4 N  5 N_CASE  6 FOLDS
-//   7 BETA  8 OR  9 SE  10 P  11 R2_NULL  12 R2_FULL
-//   13 R2_INCR  14 R2_INCR_L95  15 R2_INCR_U95
-//   16 R2L_INCR  17 R2L_INCR_L95  18 R2L_INCR_U95
-//   19 AUC_NULL  20 AUC_FULL  21 AUC_INCR
+// The .best_pgs column layout, in one place.  20 columns:
+//   1 PGS_ID  2 PHENO  3 TYPE  4 N  5 N_CASE
+//   6 BETA  7 OR  8 SE  9 P  10 R2_NULL  11 R2_FULL
+//   12 R2_INCR  13 R2_INCR_L95  14 R2_INCR_U95
+//   15 R2L_INCR  16 R2L_INCR_L95  17 R2L_INCR_U95
+//   18 AUC_NULL  19 AUC_FULL  20 AUC_INCR
 // pgs_eval_check.sh Case 0 asserts this string exactly, and every other case
 // there indexes by column number, so the two move together or not at all.
 static const char kBestPgsHeader[] =
-    "#PGS_ID\tPHENO\tTYPE\tN\tN_CASE\tFOLDS\tBETA\tOR\tSE\tP\tR2_NULL\tR2_FULL\t"
+    "#PGS_ID\tPHENO\tTYPE\tN\tN_CASE\tBETA\tOR\tSE\tP\tR2_NULL\tR2_FULL\t"
     "R2_INCR\tR2_INCR_L95\tR2_INCR_U95\tR2L_INCR\tR2L_INCR_L95\tR2L_INCR_U95\t"
     "AUC_NULL\tAUC_FULL\tAUC_INCR\n";
 
@@ -1331,17 +988,17 @@ static const char kBestPgsHeader[] =
 // header string that has to agree with the layout.
 enum {
   kBestPgsColNCase = 4,
-  kBestPgsColOr = 7,
-  kBestPgsColR2lIncr = 15,
-  kBestPgsColR2lL95 = 16,
-  kBestPgsColR2lU95 = 17,
-  kBestPgsColAucNull = 18,
-  kBestPgsColAucFull = 19,
-  kBestPgsColAucIncr = 20,
-  kBestPgsColCt = 21
+  kBestPgsColOr = 6,
+  kBestPgsColR2lIncr = 14,
+  kBestPgsColR2lL95 = 15,
+  kBestPgsColR2lU95 = 16,
+  kBestPgsColAucNull = 17,
+  kBestPgsColAucFull = 18,
+  kBestPgsColAucIncr = 19,
+  kBestPgsColCt = 20
 };
 
-// Which .best_pgs columns the run can actually fill.  All 21 bits unless
+// Which .best_pgs columns the run can actually fill.  All 20 bits unless
 // --give-best-pgs no-na is given, in which case the columns a configuration
 // cannot populate are dropped:
 //   - the case/control columns, when no phenotype is binary
@@ -1422,7 +1079,7 @@ static uint32_t CompactMaskedFields(char* line, uint32_t line_len, uint32_t keep
   return S_CAST(uint32_t, wp - line);
 }
 
-// Columns 7..21, i.e. everything an unconverged row has nothing to say about.
+// Columns 6..20, i.e. everything an unconverged row has nothing to say about.
 // The literal run of "NA\t" this count replaces was one short for the whole
 // life of the 16-column layout: an unconverged row emitted 15 fields against 16
 // names and nothing caught it, because no case in the suite produced one.  One
@@ -1466,14 +1123,6 @@ static int BestPgsRowCmp(const void* aa, const void* bb) {
   return 0;
 }
 
-// PgsEvalOlsSetFolds fails identically on the QT and CC paths -- only the
-// context to release first differs -- so the message lives here rather than
-// once per path.  It was deduplicated once before and drifted back in.
-static PglErr FoldNullFitFailed(const char* pheno_name, uint32_t fold_ct) {
-  logerrprintfww("Error: --give-best-pgs: phenotype '%s': could not fit the null model on all %u training sets. Reduce --folds, or drop a covariate that is constant within a fold.\n",
-                 pheno_name, fold_ct);
-  return kPglRetInconsistentInput;
-}
 
 // ---------------------------------------------------------------------------
 // FitWritePhenoBlock: shared inner loop — constant-covariate drop, null model
@@ -1485,9 +1134,6 @@ static PglErr FoldNullFitFailed(const char* pheno_name, uint32_t fold_ct) {
 //   0..covar_ct are filled with intercept + covar values for complete cases.
 //   The function may compact this array in place (constant-covariate drop).
 // covar_names_arr: array of covar_ct C strings (may be nullptr if covar_ct=0).
-// fold_ct / fold_seed: --folds and --seed; fold_ct == 1 means no
-//   cross-validation, and is the only value that reproduces the pre-CV output.
-//
 // keep_idxs / keep_ct: --pgs-pheno-pairs.  keep_idxs == nullptr means fit every
 //   score column, which is the unfiltered behaviour; otherwise keep_idxs[0..
 //   keep_ct) are the score-column indices this phenotype was paired with, in
@@ -1508,8 +1154,7 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
                                   char** score_col_names, uint32_t score_col_ct,
                                   const char* const* covar_names_arr,
                                   const char* pheno_name, PhenoDtype type_code,
-                                  double prevalence, uint32_t fold_ct,
-                                  uint64_t fold_seed,
+                                  double prevalence,
                                   const uint32_t* keep_idxs, uint32_t keep_ct,
                                   FILE** outfile_ptr,
                                   char* outname, char* outname_end,
@@ -1573,12 +1218,6 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
                      pheno_name);
       return kPglRetInconsistentInput;
     }
-    // No-op at fold_ct == 1, so the k = 1 path is untouched by this call.
-    if (PgsEvalOlsSetFolds(&ctx, fold_ct, 0, fold_seed)) {
-      PgsEvalOlsCleanup(&ctx);
-      return FoldNullFitFailed(pheno_name, fold_ct);
-    }
-
     for (uint32_t ki = 0; ki != fit_ct; ++ki) {
       const uint32_t sc = keep_idxs? keep_idxs[ki] : ki;
       pheno_rows[ki].name = score_col_names[sc];
@@ -1602,15 +1241,6 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
                      pheno_name);
       return kPglRetInconsistentInput;
     }
-    // Cross-validation lives entirely in the OLS companion, which is where the
-    // binary path's R^2 family already comes from; stratify on the same 0/1
-    // outcome that companion was built from.  AUC is not cross-validated -- it
-    // comes from the logistic fit, which is not refit per fold.
-    if (PgsEvalOlsSetFolds(&lctx.ols, fold_ct, 1, fold_seed)) {
-      PgsEvalLogisticCleanup(&lctx);
-      return FoldNullFitFailed(pheno_name, fold_ct);
-    }
-
     for (uint32_t ki = 0; ki != fit_ct; ++ki) {
       const uint32_t sc = keep_idxs? keep_idxs[ki] : ki;
       pheno_rows[ki].name = score_col_names[sc];
@@ -1668,7 +1298,7 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
     // smashed the stack: driven entirely by an input file, which is exactly
     // the file a user is most likely to have been handed by someone else.
     //
-    // 512 covers the fixed part -- TYPE, N, N_CASE, FOLDS and 15 numeric
+    // 512 covers the fixed part -- TYPE, N, N_CASE and 15 numeric
     // fields, each at most kMaxDoubleGSlen (13) plus a tab, under 400 in all.
     uintptr_t max_name_slen = strlen(pheno_name);
     for (uint32_t ki = 0; ki != fit_ct; ++ki) {
@@ -1698,8 +1328,6 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
         wp = u32toa(complete_ct, wp); *wp++ = '\t';
         // N_CASE
         wp = u32toa(n_case_out, wp); *wp++ = '\t';
-        // FOLDS: 1 means the model was fitted and scored on the same samples.
-        wp = u32toa(fold_ct, wp); *wp++ = '\t';
 
         if (!rr->result.converged) {
           wp = WriteNaRun(kBestPgsNaFieldCt, wp);
@@ -1718,8 +1346,7 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
           wp = dtoa_g(rr->result.r2_full, wp);      *wp++ = '\t';
           // R2_INCR, then its 95% CI.  The CI is NA in the
           // n == predictor_ct + 2 corner, where the fit has a degree of freedom
-          // left but the Fisher z standard error does not, and under
-          // cross-validation when R2_INCR came out negative.
+          // left but the Fisher z standard error does not.
           wp = dtoa_g(rr->result.r2_incr, wp);      *wp++ = '\t';
           wp = WriteDoubleOrNa(rr->result.r2_incr_l95, wp); *wp++ = '\t';
           wp = WriteDoubleOrNa(rr->result.r2_incr_u95, wp); *wp++ = '\t';
@@ -1741,8 +1368,6 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
         wp = u32toa(complete_ct, wp); *wp++ = '\t';
         // N_CASE = NA
         wp = strcpya_k(wp, "NA\t");
-        // FOLDS
-        wp = u32toa(fold_ct, wp); *wp++ = '\t';
 
         if (!rr->result.converged) {
           wp = WriteNaRun(kBestPgsNaFieldCt, wp);
@@ -1783,67 +1408,6 @@ static PglErr FitWritePhenoBlock(uint32_t complete_ct, uint32_t covar_ct,
   return reterr;
 }
 
-// --folds against one phenotype's complete-case count: k must be at least 1,
-// leave at least two samples per fold, and leave the smallest training set --
-// complete_ct minus ceil(complete_ct / k) -- with more than predictor_ct + 1
-// samples, which is what PgsEvalOlsSetFolds enforces once fitting has started.
-//
-// A hard error, not a skip: k is something the user asked for outright, so a k
-// the data cannot honour is a misconfiguration rather than a property of that
-// phenotype.  Both input paths call it, so there is one wording for both.
-//
-// Call it only on a phenotype already known to be usable.  Before it moved
-// below the case/control and constant-phenotype checks, a phenotype that would
-// have been skipped with a warning aborted the whole run instead.
-//
-// predictor_ct is the pre-drop count, intercept plus every covariate.  Constant
-// covariates are dropped per phenotype inside FitWritePhenoBlock, which can only
-// lower it, so this can be up to one covariate stricter than the fit it guards
-// -- the same pre-drop count the degrees-of-freedom skip in BestPgsValidate
-// already reasons with.  Strict is the right direction: the reason this
-// function exists is to fail before the scoring pass rather than after it.
-static PglErr BestPgsCheckFolds(uint32_t fold_ct, uint32_t complete_ct,
-                                uint32_t predictor_ct, const char* pheno_name) {
-  // The flag parser rejects 0 outright, so this is the unit's own precondition
-  // rather than the path a user reaches.  Worth keeping because the failure it
-  // prevents is silent: PgsEvalOlsSetFolds treats fold_ct <= 1 as "no
-  // cross-validation", so a 0 would produce in-sample numbers under a FOLDS
-  // column reading 0.
-  if (fold_ct < 1) {
-    logerrputs("Error: --give-best-pgs: --folds must be at least 1.\n");
-    return kPglRetInconsistentInput;
-  }
-  // Two samples per fold is the floor at which a held-out fold has any spread
-  // to be scored on at all.
-  if (fold_ct > complete_ct / 2) {
-    logerrprintfww("Error: --give-best-pgs: phenotype '%s': --folds %u needs at least %u complete-case observations, and there are %u.\n",
-                   pheno_name, fold_ct, 2 * fold_ct, complete_ct);
-    return kPglRetInconsistentInput;
-  }
-  // The same constraint PgsEvalOlsSetFolds enforces per training set, but
-  // computed up front, where it is just as computable: the largest held-out
-  // fold takes ceil(complete_ct / fold_ct) samples, so the smallest training
-  // set gets the rest, and fitting needs more than predictor_ct + 1 of them.
-  // Checking only the fold-size floor above let 10 samples with 3 covariates
-  // and --folds 2 through, to fail later inside the fitter -- by which point
-  // ScoreReport has written and discarded a whole .sscore, and on a
-  // multi-phenotype run earlier phenotypes' rows are already in the .best_pgs.
-  if (fold_ct > 1) {
-    const uint32_t min_train_ct =
-        complete_ct - (complete_ct + fold_ct - 1) / fold_ct;
-    if (min_train_ct <= predictor_ct + 1) {
-      // Naming predictor_ct here would name a count that is not what gets
-      // fitted -- constant covariates are dropped later, per phenotype -- and
-      // "drop a covariate" would be advice about work the tool already does
-      // for itself.  State the check instead, caveat included.
-      logerrprintfww("Error: --give-best-pgs: phenotype '%s': --folds %u leaves only %u samples in the smallest training set, and fitting the intercept, %u covariate(s) and the PGS there needs at least %u. That covariate count is taken before constant covariates are dropped, so this can refuse a k the fit would have managed; the check is deliberately strict because it runs before the scoring pass. Reduce --folds.\n",
-                     pheno_name, fold_ct, min_train_ct, predictor_ct - 1,
-                     predictor_ct + 2);
-      return kPglRetInconsistentInput;
-    }
-  }
-  return kPglRetSuccess;
-}
 
 // ---------------------------------------------------------------------------
 // One phenotype's complete-case data, in the form every guard wants it: dense,
@@ -1856,7 +1420,8 @@ static PglErr BestPgsCheckFolds(uint32_t fold_ct, uint32_t complete_ct,
 // downstream of that.  The copies drifted: --sscore shipped with no
 // constant-phenotype guard, so a zero-variance phenotype got a confidence
 // interval on an R2 that did not exist, and with missing values coerced to
-// controls, which inflated N and later stratified folds on fabricated labels.
+// controls, which inflated N and left every downstream count describing a
+// sample set that did not exist.
 // Both were fixed one route at a time, after shipping.  One block and one
 // validator is what stops the next one.
 //
@@ -1876,31 +1441,27 @@ typedef struct {
 } PgsPhenoBlock;
 
 // Every check a phenotype must pass before it is worth fitting: enough complete
-// cases for the predictors, a usable case/control split, a quantitative
-// phenotype that actually varies, and a --folds the data can honour.  Both
-// routes call this, so neither can acquire a guard the other lacks.
+// cases for the predictors, a usable case/control split, and a quantitative
+// phenotype that actually varies.  Both routes call this, so neither can
+// acquire a guard the other lacks.
 //
 // *usable_ptr is 0 when the phenotype was skipped -- the warning is already
-// printed and the caller should move to the next one.  The return value is
-// non-zero only for the --folds failure, which is a misconfiguration the user
-// asked for outright and takes the whole run down.
-//
-// The --folds check comes last on purpose.  Above the skips, a phenotype that
-// would merely have been dropped with a warning aborted the run instead.
-static PglErr ValidatePhenoBlock(const PgsPhenoBlock* pb, uint32_t fold_ct,
-                                 uint32_t* usable_ptr) {
+// printed and the caller should move to the next one.  Every skip is a warning,
+// never an error: one unusable phenotype must not take the others down with it,
+// and "none of them are usable" is the caller's judgement to make.
+static void ValidatePhenoBlock(const PgsPhenoBlock* pb, uint32_t* usable_ptr) {
   *usable_ptr = 0;
   const uint32_t predictor_ct = 1 + pb->covar_ct;
 
   if (!pb->n) {
     logerrprintfww("Warning: %s: phenotype '%s': no samples have both a non-missing phenotype and non-missing values for every covariate; skipping.\n",
                    pb->route, pb->name);
-    return kPglRetSuccess;
+    return;
   }
   if (pb->n <= predictor_ct + 1) {
     logerrprintfww("Warning: %s: phenotype '%s': too few complete-case observations (%u) for %u predictors; skipping.\n",
                    pb->route, pb->name, pb->n, predictor_ct);
-    return kPglRetSuccess;
+    return;
   }
 
   if (pb->type == kPhenoDtypeCc) {
@@ -1914,12 +1475,12 @@ static PglErr ValidatePhenoBlock(const PgsPhenoBlock* pb, uint32_t fold_ct,
     if (!case_ct) {
       logerrprintfww("Warning: %s: phenotype '%s': no cases in the complete-case sample set; skipping.\n",
                      pb->route, pb->name);
-      return kPglRetSuccess;
+      return;
     }
     if (case_ct == pb->n) {
       logerrprintfww("Warning: %s: phenotype '%s': no controls in the complete-case sample set; skipping.\n",
                      pb->route, pb->name);
-      return kPglRetSuccess;
+      return;
     }
   } else {
     // A constant phenotype has no variance for a PGS to explain, and the
@@ -1940,18 +1501,11 @@ static PglErr ValidatePhenoBlock(const PgsPhenoBlock* pb, uint32_t fold_ct,
     if (!(yss > 0.0)) {
       logerrprintfww("Warning: %s: phenotype '%s' is constant; skipping.\n",
                      pb->route, pb->name);
-      return kPglRetSuccess;
+      return;
     }
   }
 
-  const PglErr fold_err = BestPgsCheckFolds(fold_ct, pb->n, predictor_ct,
-                                            pb->name);
-  if (unlikely(fold_err)) {
-    return fold_err;
-  }
-
   *usable_ptr = 1;
-  return kPglRetSuccess;
 }
 
 // The --pfile route's producer: select one phenotype's complete cases out of
@@ -2034,7 +1588,6 @@ PglErr BestPgsValidate(const uintptr_t* sample_include, uint32_t sample_ct,
                        const PhenoCol* pheno_cols, const char* pheno_names,
                        uintptr_t max_pheno_name_blen, uint32_t pheno_ct,
                        const PhenoCol* covar_cols, uint32_t covar_ct,
-                       uint32_t fold_ct,
                        uint32_t* usable_pheno_idxs, uint32_t* usable_pheno_ct_ptr) {
   // Validate each phenotype individually; skip unusable ones with a warning.
   // Error only if no phenotype is usable.
@@ -2080,11 +1633,7 @@ PglErr BestPgsValidate(const uintptr_t* sample_include, uint32_t sample_ct,
     pb.route = "--give-best-pgs";
 
     uint32_t usable;
-    const PglErr reterr = ValidatePhenoBlock(&pb, fold_ct, &usable);
-    if (unlikely(reterr)) {
-      free(y_complete);
-      return reterr;
-    }
+    ValidatePhenoBlock(&pb, &usable);
     if (usable) {
       usable_pheno_idxs[usable_ct++] = pi;
     }
@@ -2593,8 +2142,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                      uintptr_t max_pheno_name_blen, uint32_t pheno_ct,
                      const PhenoCol* covar_cols, const char* covar_names,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
-                     double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                     uint32_t give_best_pgs, uint32_t corr_matrix,
+                     double prevalence, uint32_t give_best_pgs, uint32_t corr_matrix,
                      uint32_t no_na, const char* pairs_fname,
                      char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
@@ -2638,7 +2186,7 @@ PglErr BestPgsReport(const char* sscore_fname,
       }
       reterr = BestPgsValidate(sample_include, sample_ct, pheno_cols, pheno_names,
                                max_pheno_name_blen, pheno_ct, covar_cols, covar_ct,
-                               fold_ct, usable_pheno_idxs, &usable_pheno_ct);
+                               usable_pheno_idxs, &usable_pheno_ct);
       if (unlikely(reterr)) {
         goto BestPgsReport_ret_1;
       }
@@ -3035,7 +2583,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                                   score_block,
                                   score_col_names, score_col_ct,
                                   covar_names_arr, pheno_name, type_code,
-                                  prevalence, fold_ct, fold_seed,
+                                  prevalence,
                                   pair_keep_idxs, keep_ct, &outfile,
                                   outname, outname_end, pheno_rows, keep_mask);
       if (unlikely(reterr)) {
@@ -3096,9 +2644,7 @@ PglErr BestPgsReport(const char* sscore_fname,
 // producer per input route, both handing the same PgsPhenoBlock to the same
 // ValidatePhenoBlock.  This route used to have no equivalent and fitted on
 // every joined row, which silently turned a missing case/control value into a
-// control -- N and N_CASE then described a sample set that did not exist, and
-// with --folds both the pre-flight k check and the stratified fold assignment
-// ran on those fabricated labels.
+// control -- N and N_CASE then described a sample set that did not exist.
 static uint32_t SscoreCompleteCases(const double* pheno_data,
                                     uint32_t pheno_sample_ct,
                                     const uint32_t* join_pheno_idx, uint32_t ph,
@@ -3261,8 +2807,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const char* pheno_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
-                         double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                         uint32_t corr_matrix, uint32_t no_na,
+                         double prevalence, uint32_t corr_matrix, uint32_t no_na,
                          const char* pairs_fname,
                          char* outname, char* outname_end) {
   PglErr reterr = kPglRetSuccess;
@@ -4451,13 +3996,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
       pb.route = "--sscore";
 
       uint32_t usable;
-      reterr = ValidatePhenoBlock(&pb, fold_ct, &usable);
-      if (unlikely(reterr)) {
-        free(join_pheno_idx);
-        free(join_covar_idx);
-        free(join_score_idx);
-        goto BestPgsFromSscore_ret_1;
-      }
+      ValidatePhenoBlock(&pb, &usable);
       if (!usable) {
         continue;
       }
@@ -4600,7 +4139,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                                   score_block,
                                   score_col_names, score_col_ct,
                                   covar_names_arr, pheno_name, type_code,
-                                  prevalence, fold_ct, fold_seed,
+                                  prevalence,
                                   pair_keep_idxs, keep_ct, &outfile,
                                   outname, outname_end, pheno_rows, keep_mask);
       if (unlikely(reterr)) {

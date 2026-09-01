@@ -37,8 +37,7 @@ typedef struct PgsEvalResultStruct {
   // Analytic 95% CI on r2_incr.  Whether the winner of a ranking is separable
   // from the runner-up is not answerable from a point estimate, and the tool's
   // whole output is a winner.  NaN when sample_ct <= predictor_ct + 2, which
-  // leaves no degrees of freedom for the Fisher z standard error, and under
-  // cross-validation when r2_incr < 0 (see PgsEvalOlsSetFolds).
+  // leaves no degrees of freedom for the Fisher z standard error.
   double r2_incr_l95;
   double r2_incr_u95;
   // Binary-trait fields.  PgsEvalOlsOne sets them to NaN; only the logistic
@@ -56,7 +55,7 @@ typedef struct PgsEvalResultStruct {
 typedef struct PgsEvalOlsCtxStruct {
   const double* xx;   // borrowed: column-major, sample_ct * predictor_ct,
                       // column 0 is the intercept
-  const double* yy;   // borrowed, like xx; only the fold_ct > 1 path reads it
+  const double* yy;   // borrowed, like xx
   double* xtx_inv;    // predictor_ct * predictor_ct
   double* e_y;        // residuals of y on xx
   double* work;       // scratch, >= sample_ct + 2 * predictor_ct
@@ -69,21 +68,6 @@ typedef struct PgsEvalOlsCtxStruct {
   double r2_null;
   uint32_t sample_ct;
   uint32_t predictor_ct;
-  // --- k-fold cross-validation state.  fold_ct == 1 and every pointer null
-  // unless PgsEvalOlsSetFolds has been called; at fold_ct == 1 PgsEvalOlsOne
-  // does not read any of it, which is what makes --folds 1 bit-identical to
-  // the no-flag output. ---
-  uint32_t fold_ct;
-  uint32_t* fold_assign;   // sample_ct: which fold each sample is held out in
-  double* fold_xtx_inv;    // fold_ct * predictor_ct^2, one per training set
-  double* fold_beta;       // fold_ct * predictor_ct, null-model coefficients
-  double* cv_work;         // 3 * sample_ct + 2 * predictor_ct
-                           // Layout: [0, n) = out-of-fold null residuals
-                           // y - yhat_null (fixed by PgsEvalOlsSetFolds),
-                           // [n, 2n) = per-column incremental prediction,
-                           // [2n, 3n) = standardised PGS column,
-                           // [3n, 3n+p) = X'g, [3n+p, 3n+2p) = g-on-X coefs.
-  double r2_null_oof;      // 1 - sum(cv_work[0, n)^2) / tss
 } PgsEvalOlsCtx;
 
 // Two-sided p-value for Student's t on df degrees of freedom.
@@ -98,32 +82,6 @@ BoolErr PgsEvalOlsInit(const double* yy, const double* xx, uint32_t sample_ct,
 
 void PgsEvalOlsCleanup(PgsEvalOlsCtx* ctx);
 
-// Switch this context to k-fold cross-validated R^2.  Call after
-// PgsEvalOlsInit and before the first PgsEvalOlsOne; fold_ct == 1 is a no-op,
-// so callers can call it unconditionally.
-//
-// Assigns folds, factors X'X on each of the fold_ct training sets, and records
-// the pooled out-of-fold null residuals.  All of that depends only on y and X,
-// so it is paid once rather than once per PGS column.
-//
-// From then on PgsEvalOlsOne reports r2_null / r2_full / r2_incr over the
-// pooled out-of-fold predictions -- each sample predicted by the fit that did
-// not see it -- while beta / se / pval stay the in-sample estimates from all
-// the data.  That mixture is deliberate: the coefficient answers "how big is
-// the effect", for which the whole sample is the most efficient estimate,
-// while the cross-validated R^2 answers "how well does this generalise", which
-// an in-sample R^2 overstates by exactly the amount the ranking exploits.
-//
-// stratify_binary: split cases and controls separately, so an imbalanced
-// phenotype cannot put nearly all its cases in one fold.  Pass 1 for a 0/1 y.
-// seed: fold assignment is deterministic given (seed, y, sample order).
-//
-// Returns 1 on allocation failure, if a training set has too few samples for
-// the predictors, or if X'X is singular on one -- the last is what catches a
-// covariate that is constant within a fold.
-BoolErr PgsEvalOlsSetFolds(PgsEvalOlsCtx* ctx, uint32_t fold_ct,
-                           uint32_t stratify_binary, uint64_t seed);
-
 // Fit y ~ 1 + covars + gg by Frisch-Waugh-Lovell.  Algebraically identical to
 // refitting the full model, not an approximation, and needs only this one PGS
 // column -- so peak memory does not grow with the number of models.
@@ -135,11 +93,9 @@ BoolErr PgsEvalOlsSetFolds(PgsEvalOlsCtx* ctx, uint32_t fold_ct,
 //   - collinear PGS (gg_dot <= 1e-10 * (sample_ct - 1) after residualisation);
 //   - degenerate fit (rss_full <= 0 due to floating-point cancellation when
 //     the PGS nearly perfectly explains all remaining variance);
-//   - insufficient degrees of freedom (sample_ct <= predictor_ct + 1);
-//   - with folds set, a PGS collinear with the covariates inside one training
-//     set even though the whole-sample fit was fine.
+//   - insufficient degrees of freedom (sample_ct <= predictor_ct + 1).
 //
-// THREADING: ctx->work and ctx->cv_work are scratch and are overwritten on
+// THREADING: ctx->work is scratch and is overwritten on
 // every call despite the const pointer.  PgsEvalOlsOne is NOT reentrant; use
 // one ctx per thread.
 //
@@ -222,9 +178,9 @@ double AucMannWhitneyTest(const double* pp, const double* yy,
 double LiabilityScaleR2Test(double r2_observed, double prevalence,
                              double case_proportion);
 double QnormTest(double pp);
-// The Fisher z core the cross-validated path reaches with its own partial
-// correlation.  Exposed so the test can feed it the in-sample r and check that
-// it returns the in-sample interval -- i.e. that there really is one formula.
+// The Fisher z core, taking a partial correlation directly.  Exposed so the
+// test can feed it the in-sample r and check that it returns the same interval
+// PgsEvalOlsOne emits -- i.e. that there really is one formula.
 void IncrR2CiFromRTest(double rr, double r2_null, uint32_t sample_ct,
                        uint32_t predictor_ct, double* lo, double* hi);
 
@@ -236,7 +192,6 @@ PglErr BestPgsValidate(const uintptr_t* sample_include, uint32_t sample_ct,
                        const PhenoCol* pheno_cols, const char* pheno_names,
                        uintptr_t max_pheno_name_blen, uint32_t pheno_ct,
                        const PhenoCol* covar_cols, uint32_t covar_ct,
-                       uint32_t fold_ct,
                        uint32_t* usable_pheno_idxs, uint32_t* usable_pheno_ct_ptr);
 
 // --pgs-pheno-pairs: the (phenotype, PGS) combinations to evaluate.
@@ -310,8 +265,7 @@ PglErr BestPgsReport(const char* sscore_fname,
                      uintptr_t max_pheno_name_blen, uint32_t pheno_ct,
                      const PhenoCol* covar_cols, const char* covar_names,
                      uintptr_t max_covar_name_blen, uint32_t covar_ct,
-                     double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                     uint32_t give_best_pgs, uint32_t corr_matrix,
+                     double prevalence, uint32_t give_best_pgs, uint32_t corr_matrix,
                      uint32_t no_na, const char* pairs_fname,
                      char* outname, char* outname_end);
 
@@ -331,8 +285,7 @@ PglErr BestPgsFromSscore(const char* sscore_fname,
                          const char* pheno_fname,
                          const RangeList* pheno_range_list,
                          const char* covar_fname,
-                         double prevalence, uint32_t fold_ct, uint64_t fold_seed,
-                         uint32_t corr_matrix, uint32_t no_na,
+                         double prevalence, uint32_t corr_matrix, uint32_t no_na,
                          const char* pairs_fname,
                          char* outname, char* outname_end);
 

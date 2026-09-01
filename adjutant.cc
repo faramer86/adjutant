@@ -365,8 +365,6 @@ typedef struct Plink2CmdlineStruct {
   double min_maf;
   double max_maf;
   double pgs_prevalence; // < 0 means not supplied
-  uint32_t pgs_folds;      // --folds; 1 means no cross-validation
-  uint32_t pgs_fold_seed;  // --seed, kept for reproducible fold assignment
   uint64_t min_allele_ddosage;
   uint64_t max_allele_ddosage;
   int32_t missing_pheno;
@@ -1416,7 +1414,7 @@ PglErr Plink2Core(const Plink2Cmdline* pcp, MakePlink2Flags make_plink2_flags, c
       uint32_t tmp_usable_ct = 0;
       reterr = BestPgsValidate(sample_include, sample_ct,
                                pheno_cols, pheno_names, max_pheno_name_blen,
-                               pheno_ct, covar_cols, covar_ct, pcp->pgs_folds,
+                               pheno_ct, covar_cols, covar_ct,
                                tmp_usable_idxs, &tmp_usable_ct);
       free(tmp_usable_idxs);
       if (unlikely(reterr)) {
@@ -1997,8 +1995,7 @@ PglErr Plink2Core(const Plink2Cmdline* pcp, MakePlink2Flags make_plink2_flags, c
                                  pheno_cols, pheno_names, max_pheno_name_blen,
                                  pheno_ct, covar_cols, covar_names,
                                  max_covar_name_blen, covar_ct,
-                                 pcp->pgs_prevalence, pcp->pgs_folds,
-                                 pcp->pgs_fold_seed,
+                                 pcp->pgs_prevalence,
                                  give_best_pgs, corr_matrix,
                                  (pcp->score_info.flags / kfScoreBestPgsNoNa) & 1,
                                  pcp->pgs_pheno_pairs_fname,
@@ -2286,12 +2283,6 @@ int main(int argc, char** argv) {
     pc.min_maf = 0.0;
     pc.max_maf = 1.0;
     pc.pgs_prevalence = -1.0;  // < 0 means not supplied
-    pc.pgs_folds = 1;
-    // Fold assignment defaults to a fixed seed rather than the clock: every
-    // other number this tool prints is a deterministic function of its inputs,
-    // and a cross-validated R^2 that moved between identical runs would not be.
-    // --seed overrides it.
-    pc.pgs_fold_seed = 0;
     pc.min_allele_ddosage = 0;
     pc.max_allele_ddosage = (~0LLU);
     pc.var_min_qual = -1;
@@ -2505,25 +2496,6 @@ int main(int argc, char** argv) {
           }
           pc.mhc_region = mhc_regions[mhc_idx];
           pc.filter_flags |= kfFilterPvarReq;
-        }
-        break;
-
-      case 'f':
-        if (strequal_k_unsafe(flagname_p2, "olds")) {
-          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 1, 1))) {
-            goto main_ret_INVALID_CMDLINE_2A;
-          }
-          // ScanPosintCappedx, not ScanUintCappedx: 0 folds is wrong on its
-          // face, so it is refused here rather than after the pgen, phenotypes
-          // and covariates have loaded -- which is where the range test
-          // against the complete-case count genuinely has to happen, since
-          // BestPgsValidate is the first place that count exists.
-          if (unlikely(ScanPosintCappedx(argvk[arg_idx + 1], 0x7fffffff, &pc.pgs_folds))) {
-            snprintf(g_logbuf, kLogbufSize, "Error: Invalid --folds argument '%s'.\n", argvk[arg_idx + 1]);
-            goto main_ret_INVALID_CMDLINE_WWA;
-          }
-        } else {
-          goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
         }
         break;
 
@@ -2852,10 +2824,6 @@ int main(int argc, char** argv) {
               goto main_ret_INVALID_CMDLINE_WWA;
             }
           }
-          // rseeds is consumed and freed by the sfmt initialisation below,
-          // so --folds keeps its own copy.  The first value is enough: fold
-          // assignment needs one reproducible 64-bit seed, not sfmt's state.
-          pc.pgs_fold_seed = rseeds[0];
         } else if (strequal_k_unsafe(flagname_p2, "core")) {
           if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 1, 12))) {
             goto main_ret_INVALID_CMDLINE_2A;
@@ -3221,10 +3189,6 @@ int main(int argc, char** argv) {
       logerrputs("Error: --prevalence must be used with --give-best-pgs.\n");
       goto main_ret_INVALID_CMDLINE_A;
     }
-    if ((pc.pgs_folds != 1) && (!(pc.score_info.flags & kfScoreGiveBestPgs))) {
-      logerrputs("Error: --folds must be used with --give-best-pgs.\n");
-      goto main_ret_INVALID_CMDLINE_A;
-    }
     // --score is the only command; without it there is nothing to do.  (This
     // guard was lost when the other commands were removed, which left the tool
     // loading the whole fileset and then exiting 0 in silence.)
@@ -3481,8 +3445,7 @@ int main(int argc, char** argv) {
                                  pc.pheno_range_list.name_ct ?
                                      &pc.pheno_range_list : nullptr,
                                  pc.covar_fname,
-                                 pc.pgs_prevalence, pc.pgs_folds,
-                                 pc.pgs_fold_seed,
+                                 pc.pgs_prevalence,
                                  (pc.score_info.flags / kfScoreGiveCorrMatrix) & 1,
                                  (pc.score_info.flags / kfScoreBestPgsNoNa) & 1,
                                  pc.pgs_pheno_pairs_fname,

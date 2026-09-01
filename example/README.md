@@ -50,7 +50,7 @@ also exercises the ambiguous-variant path rather than matching cleanly.
 
 `HEIGHT` is **generated from `PGS_B`**, so `--give-best-pgs` has a real answer
 to find: it ranks `PGS_B` first at R² ≈ 0.17 while the two decoys get an
-`R2_INCR_L95` of exactly 0, and under `--folds 5` the decoys go negative.
+`R2_INCR_L95` of exactly 0.
 `DISEASE` splits on the same signal, tuned to a realistic OR ≈ 2.4 / AUC ≈ 0.70
 rather than a near-perfect separation that would teach nothing.
 

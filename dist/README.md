@@ -67,7 +67,7 @@ different recipe, not build nondeterminism.
 
 `score_check.sh` covers `--score` and nothing else, so everything built on top of
 it was exercised separately: plain and partitioned scoring, `--give-best-pgs`
-with and without `--folds`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
+with and without `no-na`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
 `--pgs-model` on both keys, `--pgs-models-list`, all four MHC regions on both
 routes, a `.sscore` wider than the old 1024-column ceiling, and the refusal of
 the `--extract`/`--exclude` interval modifiers. Sixteen commands, 27 outputs,
@@ -131,6 +131,15 @@ The Linux binary is built on Debian bullseye (glibc 2.31, 2020) so it runs on
 older long-lived cluster images.
 
 ## Notable changes to check against
+
+**`.best_pgs` is now 20 columns, not 21.** `--folds` and its `FOLDS` column
+have been removed: cross-validation corrected an in-sample optimism of about
+1/(N-p) -- one parameter's worth, since `R2_INCR` is a difference of two R2 that
+differ by one predictor -- and overshot it, landing further from the truth than
+doing nothing at N=150. It did not address the winner's curse, which is the
+bias that actually matters when ranking, and did not improve which model the
+ranking picks. Anything parsing `.best_pgs` by column number needs updating;
+by name, nothing changes except that `FOLDS` is gone.
 
 `.matched` is now `CHR POS ID A1 A2` followed by one weight column per model,
 every identifying field taken from the matched `.bim` row. `--score` therefore

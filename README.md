@@ -89,12 +89,11 @@ See [example/README.md](example/README.md) for how they were made.
 
 - **[Rank models](#1-rank-models-against-a-trait)** — Rank candidate scores by the R² each adds to a covariates-only null model (`--give-best-pgs`).
 - **[Case/control traits](#2-casecontrol-traits)** — Binary phenotypes are detected automatically and reported with odds ratios and AUC; `--prevalence` adds liability-scale R².
-- **[Cross-validate](#3-cross-validate-the-ranking)** — Estimate performance by k-fold cross-validation, which corrects the optimism of selecting the best of many candidates (`--folds`).
-- **[Correlate models](#4-correlation-matrix)** — Compute a Pearson correlation matrix across the scored models (`--give-corr-matrix`).
-- **[Chosen pairs only](#5-evaluate-only-certain-pairs)** — Restrict evaluation to named (phenotype, model) pairs instead of the full cross-product (`--pgs-pheno-pairs`).
-- **[One PGS, every trait](#6-evaluate-single-pgs-against-all-of-the-phenotypes)** — Evaluate a score against every phenotype in the file by omitting `--pheno-name`.
-- **[Reuse a score matrix](#7-use-a-score-matrix-you-already-have)** — Evaluate scores computed earlier, without reading genotypes again (`--sscore`).
-- **[Trim empty columns](#8-drop-the-columns-your-run-cannot-fill)** — Omit the `.best_pgs` columns a run cannot fill, which is 8 of 21 when every phenotype is quantitative (`--give-best-pgs no-na`).
+- **[Correlate models](#3-correlation-matrix)** — Compute a Pearson correlation matrix across the scored models (`--give-corr-matrix`).
+- **[Chosen pairs only](#4-evaluate-only-certain-pairs)** — Restrict evaluation to named (phenotype, model) pairs instead of the full cross-product (`--pgs-pheno-pairs`).
+- **[One PGS, every trait](#5-evaluate-single-pgs-against-all-of-the-phenotypes)** — Evaluate a score against every phenotype in the file by omitting `--pheno-name`.
+- **[Reuse a score matrix](#6-use-a-score-matrix-you-already-have)** — Evaluate scores computed earlier, without reading genotypes again (`--sscore`).
+- **[Trim empty columns](#7-drop-the-columns-your-run-cannot-fill)** — Omit the `.best_pgs` columns a run cannot fill, which is 8 of 20 when every phenotype is quantitative (`--give-best-pgs no-na`).
 
 **[III. Harmonisation](#iii-harmonisation)** — weights + a `.bim` → `.matched`
 
@@ -227,6 +226,17 @@ phenotype on covariates alone (`R2_NULL`), then with the score added
 because the null model does not involve the score; it moves only when the
 phenotype or the covariates change.
 
+**The winner's `R2_INCR` is not an unbiased estimate of its performance.** The
+ranking picks the largest of N noisy numbers, so the top row is upward-biased by
+however much luck contributed — the smaller the gap between the leaders relative
+to the standard error, the larger that bias. It is a property of taking a
+maximum, not of the fit, so `R2_INCR_L95`/`_U95` do not correct for it either:
+they describe a model chosen in advance.
+
+Ranking itself is unaffected — every candidate is scored on the same samples
+with the same degrees of freedom. If you need a number to quote for the winner,
+select on one subset of samples and report on another.
+
 ### 2) Case/control traits
 
 Phenotype type provided via `--pheno-name` is detected automatically. 
@@ -245,26 +255,7 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 3-5 \
 | PGS_A | DISEASE | CC | 300 | 148 | 0.920839 | 0.478059 | 0.00167475 | 0.0014212 | 0.541474 | 0.540985 |
 | PGS_C | DISEASE | CC | 300 | 148 | 1.04041 | 0.732916 | 0.000387154 | 0.000328542 | 0.541474 | 0.54183 |
 
-### 3) Cross-validate the ranking
-
-Picking the best of N models and reporting its in-sample R² overstates it.
-`--folds k` fits on k−1 folds and scores on the held-out one:
-
-```sh
-adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 3-5 \
-         --pheno pheno.txt --pheno-name HEIGHT --covar covar.txt \
-         --give-best-pgs --folds 5 --out result
-```
-
-| PGS_ID | FOLDS | R2_NULL | R2_FULL | R2_INCR | R2_INCR_L95 |
-|---|---|---|---|---|---|
-| PGS_B | 5 | -0.0228002 | 0.14881 | 0.171611 | 0.0985724 |
-| PGS_C | 5 | -0.0228002 | -0.0268428 | -0.00404261 | NA |
-| PGS_A | 5 | -0.0228002 | -0.0298362 | -0.00703593 | NA |
-
-`--folds 1` is the default, bit-identical to omitting the flag.
-
-### 4) Correlation matrix
+### 3) Correlation matrix
 
 It is also possible to produce correlation matrix for used PGSs.
 
@@ -279,7 +270,7 @@ adjutant --bfile demo --score weights.txt 1 2 header-read --score-col-nums 3-5 \
 | PGS_B | -0.0248890537084 | 1 | -0.0752174055941 |
 | PGS_C | -0.0589350562717 | -0.0752174055941 | 1 |
 
-### 5) Evaluate only certain pairs
+### 4) Evaluate only certain pairs
 
 You can specify which phenotypes from `--pheno` should be used to evaluate each score. 
 Define the corresponding score–phenotype pairs in the file passed to `--pgs-pheno-pairs`:
@@ -303,7 +294,7 @@ adjutant --sscore result.sscore --pheno pheno.txt --covar covar.txt \
 Two rows instead of six. An unknown name is an error, not a silently dropped
 row.
 
-### 6) Evaluate single PGS against all of the phenotypes
+### 5) Evaluate single PGS against all of the phenotypes
 
 Sometimes you have only single PGS and you need to evalaute it agains all of the phenotypes in `--pheno`.
 
@@ -317,7 +308,7 @@ adjutant --bfile demo --score weights.txt 1 2 4 header-read \
 | PGS_B | HEIGHT | QT | 300 | NA | 0.171924 | 0.099872 | 7.77127e-14 |
 | PGS_B | DISEASE | CC | 300 | 148 | 0.128126 | 0.0649802 | 7.7551e-09 |
 
-### 7) Use a score matrix you already have
+### 6) Use a score matrix you already have
 
 Sometimes you already have a `.sscore` from a previous run, or from plink2 or adjutant, and want to skip the scoring step.
 `--sscore` takes any `.sscore` from plink2 or adjutant, and needs no genotypes:
@@ -327,9 +318,9 @@ adjutant --sscore result.sscore --pheno pheno.txt --covar covar.txt \
          --give-best-pgs --out ranked
 ```
 
-### 8) Drop the columns your run cannot fill
+### 7) Drop the columns your run cannot fill
 
-`.best_pgs` always has 21 columns, eight of which describe binary traits. A run
+`.best_pgs` always has 20 columns, eight of which describe binary traits. A run
 where every phenotype is quantitative fills all eight with `NA`, so roughly two
 fifths of the file carries nothing. `no-na` omits them:
 
@@ -540,14 +531,13 @@ A1, which is what makes them comparable.
 
 ### `.best_pgs`
 
-21 columns, the same set for both trait types.
+20 columns, the same set for both trait types.
 
 | Column | Meaning |
 |---|---|
 | `PGS_ID`, `PHENO` | which model, which phenotype |
 | `TYPE` | `QT` or `CC` |
 | `N`, `N_CASE` | complete cases; cases among them (`CC` only) |
-| `FOLDS` | cross-validation folds behind `R2_INCR` |
 | `BETA`, `SE`, `P` | per SD of the score. `CC`: log-odds from a logistic fit |
 | `OR` | `exp(BETA)` (`CC` only) |
 | `R2_NULL`, `R2_FULL` | variance explained without and with the score |

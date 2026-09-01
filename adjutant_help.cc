@@ -125,7 +125,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "              --exclude-mhc-hg19/hg38 --exclude-xmhc-hg19/hg38\n"
 "  phenotype   --pheno --pheno-name --pheno-col-nums --covar --covar-name\n"
 "  evaluation  --give-best-pgs --give-corr-matrix --pgs-pheno-pairs\n"
-"              --prevalence --folds\n"
+"              --prevalence\n"
 "  harmonise   --bim --pgs-model --pgs-models-list\n"
 "              --allow-ambiguous --resolve-ambiguous\n"
 "  runtime     --out --threads --memory --seed --silent --help --version\n"
@@ -273,18 +273,20 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "    Needs a phenotype and either --score or --sscore.  Quantitative\n"
 "    phenotypes are fitted by OLS, case/control by logistic regression.\n"
 "\n"
-"    21 columns; the README has the full reference.  The sort key R2_INCR is\n"
+"    20 columns; the README has the full reference.  The sort key R2_INCR is\n"
 "    observed-scale for both trait types, not a pseudo-R2 of the logistic fit.\n"
 "    R2L_* need --prevalence; OR and AUC_* are case/control only.\n"
 "\n"
-"    'no-na' omits the columns this run cannot fill, which is 8 of the 21 when\n"
+"    'no-na' omits the columns this run cannot fill, which is 8 of the 20 when\n"
 "    every phenotype is quantitative.  N_CASE, OR and AUC_* go when no\n"
 "    phenotype is case/control; R2L_* go when --prevalence is absent as well.\n"
 "    The rule is the configuration, not the data, so the columns follow from\n"
 "    the command line and a column left empty by a failed fit still appears.\n"
 "\n"
-"    Read the interval before the ranking: over many candidates the winner is\n"
-"    partly the luckiest, and --folds is the answer to that.\n"
+"    Read the interval before the ranking.  Over many candidates the winner is\n"
+"    partly the luckiest, and R2_INCR_L95/U95 describe a model chosen in\n"
+"    advance, not one picked as the maximum of many.  To quote a number for the\n"
+"    winner, select on one subset and report on another.\n"
 "\n"
                );
     HelpPrint("give-corr-matrix\0", &help_ctrl, 1,
@@ -316,16 +318,6 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  --prevalence <val>        Population prevalence in (0,1), for liability-\n"
 "                            scale R^2 (Lee 2012).  Case/control only.\n"
                );
-    HelpPrint("folds\0", &help_ctrl, 1,
-"  --folds <k>               k-fold cross-validated R2_INCR.  Default 1 (none),\n"
-"                            which is bit-identical to omitting the flag.\n"
-"\n"
-"    Null and full models are fitted on k-1 folds and scored on the held-out\n"
-"    one.  BETA, SE, P and AUC stay in-sample; only the R2 family is\n"
-"    cross-validated.  A negative R2_INCR is a real outcome and gets NA bounds.\n"
-"    Folds are stratified for case/control and reproducible from --seed.\n"
-               );
-
     if (!param_ct) {
       fputs("\nHARMONISATION   Standalone.  Aligns a weight file to a target .bim.\n\n", stdout);
     }
@@ -393,7 +385,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  --out <prefix>            Output prefix.  Default 'adjutant'.\n"
 "  --threads <n>             Compute threads.  Default: detected cores.\n"
 "  --memory <MiB>            Main workspace size.\n"
-"  --seed <n>                Random seed; fixes --folds assignment.\n"
+"  --seed <n>                Random seed.\n"
 "  --silent                  Suppress stdout; the .log is still written.\n"
 "  --help [flag...]          This text, or detail on the named flags.\n"
 "  --version                 Print version and exit.\n"
