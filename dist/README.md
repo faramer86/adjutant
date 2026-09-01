@@ -59,7 +59,7 @@ no `-DNDEBUG` — while `make release` adds both. A green gate is therefore
 evidence about the unoptimised binary, and says nothing about the optimised one
 beyond what they share. Run the suites and the sweep again against the actual
 `make release` output before copying it here. The two are easy to tell apart by
-size: the release build is 1,314,168 bytes, the gate's is 1,449,624.
+size: the release build is 1,330,792 bytes, the gate's is 1,449,416.
 
 `make release` is reproducible — two clean builds of `b2f71f8` gave the same
 SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
@@ -131,6 +131,11 @@ The Linux binary is built on Debian bullseye (glibc 2.31, 2020) so it runs on
 older long-lived cluster images.
 
 ## Notable changes to check against
+
+**`--give-best-pgs cols=` pins the columns and their order.** `cols=PGS_ID,
+PHENO,R2_INCR,P` emits exactly those, in that order, so a positional parser
+stays correct across versions: adding a column changes the default layout,
+never a named one. Prefer it over indexing the default layout by position.
 
 **`.best_pgs` is now 20 columns, not 21.** `--folds` and its `FOLDS` column
 have been removed: cross-validation corrected an in-sample optimism of about
