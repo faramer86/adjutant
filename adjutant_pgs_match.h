@@ -121,7 +121,7 @@ typedef struct PgsAmbigResolveStruct {
 //
 // *out_reversed is set to 1 for the reversed outcomes (including
 // kPgsMatchResolvedReversed); the CALLER negates beta, or under
-// --keep-effect-allele writes it against the target's a0 instead.  The
+// 'keep-allele' writes it against the target's a0 instead.  The
 // sign decision is kept at one visible call site so it cannot be applied
 // twice.
 //
@@ -152,8 +152,8 @@ PgsMatchStatus PgsMatchOne(const char* src_a0, const char* src_a1,
 //                     requires col_freq and read_freq_fname
 //   maf_threshold     refuse to resolve at or above this MAF, on the
 //                     source and on the target frequency alike
-//   keep_effect       if nonzero, write each weight on the source's own
-//                     effect allele at its own sign (--keep-effect-allele)
+//   keep_allele       if nonzero, write each weight on the source's own
+//                     effect allele at its own sign ('keep-allele')
 //                     instead of on the .bim's A1
 //   read_freq_fname   target .afreq, or nullptr
 //   outname           output filename prefix (NUL-terminated)
@@ -172,7 +172,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t allow_ambiguous,
                    uint32_t resolve_ambig,
                    double maf_threshold,
-                   uint32_t keep_effect,
+                   uint32_t keep_allele,
                    const char* read_freq_fname,
                    MhcRegion mhc_region,
                    char* outname,
@@ -215,7 +215,7 @@ PglErr RunPgsModel(const char* bim_fname,
 // tools supporting those must split a model set across several files
 // instead of reorienting, and why one merged file always suffices here.
 //
-// keep_effect (--keep-effect-allele) does not reorient, so raw sums are
+// keep_allele ('keep-allele') does not reorient, so raw sums are
 // the source model's own.  Where two models name opposite effect alleles
 // for one variant, that variant gets one row per allele, A1's first,
 // each with 0 under the models that use the other; plink2 --score takes
@@ -253,7 +253,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t allow_ambiguous,
                         uint32_t resolve_ambig,
                         double maf_threshold,
-                        uint32_t keep_effect,
+                        uint32_t keep_allele,
                         const char* read_freq_fname,
                         MhcRegion mhc_region,
                         char* outname,

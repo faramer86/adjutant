@@ -271,7 +271,7 @@ typedef struct SrcVariantStruct {
   // never needs it, but merging several models does: it keys the union and
   // orders it by .bim position without comparing ID strings.
   uint32_t bim_idx;
-  // out_a1 is the .bim's A2 rather than its A1.  Only --keep-effect-allele
+  // out_a1 is the .bim's A2 rather than its A1.  Only 'keep-allele'
   // writes a weight there, and the merge needs to know which allele's row a
   // weight belongs on.
   uint32_t out_on_a2;
@@ -1042,7 +1042,7 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                              uint32_t allow_ambiguous,
                              uint32_t resolve_ambig,
                              double maf_threshold,
-                             uint32_t keep_effect,
+                             uint32_t keep_allele,
                              const AfreqTable* afreq_tab,
                              MhcRegion mhc_region,
                              const char* flag,
@@ -1274,13 +1274,13 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
         }
         // Matched.  A reversed outcome means the source's effect allele is
         // the .bim's A2.  By default the weight moves to A1 and is negated
-        // HERE, exactly once.  --keep-effect-allele leaves it on A2 at the
+        // HERE, exactly once.  'keep-allele' leaves it on A2 at the
         // source's own sign, so the row scores exactly as the source does.
         double out_beta = sv->src_beta;
         uint32_t on_a2 = 0;
         if (out_reversed) {
           ++out->stats.n_reversed;
-          if (keep_effect) {
+          if (keep_allele) {
             on_a2 = 1;
           } else {
             out_beta = -out_beta;
@@ -1502,7 +1502,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t allow_ambiguous,
                    uint32_t resolve_ambig,
                    double maf_threshold,
-                   uint32_t keep_effect,
+                   uint32_t keep_allele,
                    const char* read_freq_fname,
                    MhcRegion mhc_region,
                    char* outname,
@@ -1542,7 +1542,7 @@ PglErr RunPgsModel(const char* bim_fname,
   reterr = HarmoniseModel(&bx, pgs_model_fname, match_by_id, col_id,
                           col_chr, col_pos, col_effect, col_other,
                           col_weight, col_freq, allow_ambiguous,
-                          resolve_ambig, maf_threshold, keep_effect,
+                          resolve_ambig, maf_threshold, keep_allele,
                           &afreq_tab, mhc_region,
                           "--pgs-model", pgs_model_fname, &res);
   if (unlikely(reterr)) goto RunPgsModel_ret_1;
@@ -1633,7 +1633,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t allow_ambiguous,
                         uint32_t resolve_ambig,
                         double maf_threshold,
-                        uint32_t keep_effect,
+                        uint32_t keep_allele,
                         const char* read_freq_fname,
                         MhcRegion mhc_region,
                         char* outname,
@@ -1659,7 +1659,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
 
   uint32_t* keep_col  = nullptr;   // model -> output column, or UINT32_MAX
   // bim row -> which of its alleles carry an output row: bit 0 its A1, bit 1
-  // its A2.  Bit 1 is only ever set under --keep-effect-allele.
+  // its A2.  Bit 1 is only ever set under 'keep-allele'.
   unsigned char* union_sides = nullptr;
   uint32_t* cursor    = nullptr;   // per kept column, position in its hits[]
   double*   rowbuf    = nullptr;   // one output row
@@ -1828,7 +1828,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
     reterr = HarmoniseModel(&bx, paths[mi], match_by_id, col_id,
                             col_chr, col_pos, col_effect, col_other,
                             col_weight, col_freq, allow_ambiguous,
-                            resolve_ambig, maf_threshold, keep_effect,
+                            resolve_ambig, maf_threshold, keep_allele,
                             &afreq_tab, mhc_region,
                             "--pgs-models-list", prog_label, &res);
     if (unlikely(reterr)) goto RunPgsModelsList_ret_1;
@@ -1881,7 +1881,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
 
   // One output row per (variant, allele) that some model weights.  By default
   // every weight is on the .bim's A1, so that is one row per variant.  Under
-  // --keep-effect-allele two models can name opposite effect alleles for one
+  // 'keep-allele' two models can name opposite effect alleles for one
   // variant; each allele then gets its own row, with 0 under the models that
   // use the other.  Neither weight can be moved onto the other allele without
   // shifting that model's raw score, which is what the flag exists to avoid.

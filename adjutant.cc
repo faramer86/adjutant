@@ -453,7 +453,7 @@ typedef struct Plink2CmdlineStruct {
   uint32_t pgs_model_allow_ambiguous;  // --allow-ambiguous flag
   uint32_t pgs_model_resolve_ambig;    // --resolve-ambiguous flag
   double pgs_model_maf_threshold;      // --resolve-ambiguous argument
-  uint32_t pgs_model_keep_effect;      // --keep-effect-allele flag
+  uint32_t pgs_model_keep_allele;      // trailing 'keep-allele' modifier
   char* indep_preferred_fname;
   char* not_pheno_flattened;
   char* not_covar_flattened;
@@ -2171,7 +2171,7 @@ int main(int argc, char** argv) {
   pc.pgs_model_allow_ambiguous = 0;
   pc.pgs_model_resolve_ambig   = 0;
   pc.pgs_model_maf_threshold   = 0.4;
-  pc.pgs_model_keep_effect     = 0;
+  pc.pgs_model_keep_allele     = 0;
   pc.indep_preferred_fname = nullptr;
   pc.not_pheno_flattened = nullptr;
   pc.not_covar_flattened = nullptr;
@@ -2559,11 +2559,6 @@ int main(int argc, char** argv) {
             goto main_ret_1;
           }
           pc.filter_flags |= kfFilterPsamReq;
-        } else if (strequal_k_unsafe(flagname_p2, "eep-effect-allele")) {
-          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 0, 0))) {
-            goto main_ret_INVALID_CMDLINE_2A;
-          }
-          pc.pgs_model_keep_effect = 1;
         } else {
           goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
         }
@@ -2707,8 +2702,8 @@ int main(int argc, char** argv) {
           pc.dependency_flags |= kfFilterPsamReq;
         } else if (strequal_k_unsafe(flagname_p2, "gs-model") ||
                    strequal_k_unsafe(flagname_p2, "gs-models-list")) {
-          // --pgs-model       <file> <chr> <pos> <effect> <other> <weight> [<freq>]
-          // --pgs-models-list <list> <chr> <pos> <effect> <other> <weight> [<freq>]
+          // --pgs-model       <file> <chr> <pos> <effect> <other> <weight> [<freq>] ['keep-allele']
+          // --pgs-models-list <list> <chr> <pos> <effect> <other> <weight> [<freq>] ['keep-allele']
           //
           // The indices mean the same thing for both, so they are parsed
           // once here; --pgs-models-list applies them to every file it
@@ -2720,11 +2715,18 @@ int main(int argc, char** argv) {
           // index, so the two forms never overlap.
           const uint32_t by_id = (param_ct >= 2) &&
             strequal_k(argvk[arg_idx + 2], "id", strlen(argvk[arg_idx + 2]));
+          // A trailing literal 'keep-allele' keeps each weight on the source's
+          // own effect allele.  Like 'id' it cannot be a column index, and it
+          // adds to the count rather than standing in for a column.
+          const uint32_t keep_allele = (param_ct >= 2) &&
+            strequal_k(argvk[arg_idx + param_ct], "keep-allele",
+                       strlen(argvk[arg_idx + param_ct]));
           if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct,
-                                           by_id? 6 : 6, by_id? 7 : 7))) {
+                                           6 + keep_allele, 7 + keep_allele))) {
             goto main_ret_INVALID_CMDLINE_2A;
           }
           pc.pgs_model_by_id = by_id;
+          pc.pgs_model_keep_allele = keep_allele;
           reterr = AllocFname(argvk[arg_idx + 1], flagname_p,
                               is_list ? &pc.pgs_models_list_fname
                                       : &pc.pgs_model_fname);
@@ -2733,7 +2735,7 @@ int main(int argc, char** argv) {
           }
           // Parse the 1-based column indices: five required, the sixth
           // (source effect-allele frequency) optional.
-          const uint32_t pgs_col_ct = param_ct - 1 - by_id;
+          const uint32_t pgs_col_ct = param_ct - 1 - by_id - keep_allele;
           uint32_t pgs_cols[6];
           for (uint32_t pidx = 0; pidx < pgs_col_ct; ++pidx) {
             const char* cur_modif = argvk[arg_idx + 2 + by_id + pidx];
@@ -3111,10 +3113,6 @@ int main(int argc, char** argv) {
       logerrputs("Error: --allow-ambiguous requires --pgs-model or --pgs-models-list.\n");
       goto main_ret_INVALID_CMDLINE_A;
     }
-    if (unlikely(pc.pgs_model_keep_effect && !harmonise_fname)) {
-      logerrputs("Error: --keep-effect-allele requires --pgs-model or --pgs-models-list.\n");
-      goto main_ret_INVALID_CMDLINE_A;
-    }
     if (pc.pgs_model_resolve_ambig) {
       if (unlikely(!harmonise_fname)) {
         logerrputs("Error: --resolve-ambiguous requires --pgs-model or --pgs-models-list.\n");
@@ -3427,7 +3425,7 @@ int main(int argc, char** argv) {
                            pc.pgs_model_allow_ambiguous,
                            pc.pgs_model_resolve_ambig,
                            pc.pgs_model_maf_threshold,
-                           pc.pgs_model_keep_effect,
+                           pc.pgs_model_keep_allele,
                            pc.read_freq_fname,
                            pc.mhc_region,
                            outname, outname_end);
@@ -3449,7 +3447,7 @@ int main(int argc, char** argv) {
                                 pc.pgs_model_allow_ambiguous,
                                 pc.pgs_model_resolve_ambig,
                                 pc.pgs_model_maf_threshold,
-                                pc.pgs_model_keep_effect,
+                                pc.pgs_model_keep_allele,
                                 pc.read_freq_fname,
                                 pc.mhc_region,
                                 outname, outname_end);

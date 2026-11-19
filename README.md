@@ -549,19 +549,21 @@ A1, which is what makes them comparable.
 > always suffices.
 >
 > If you need the raw sums themselves, for example to compare with scores
-> computed elsewhere from the published model, `--keep-effect-allele` avoids
-> the shift. See the next section.
+> computed elsewhere from the published model, the `keep-allele` modifier
+> avoids the shift. See the next section.
 
 ### 5) Keeping each model's own effect allele
 
-`--keep-effect-allele` skips the reorientation. Each weight stays on the
-source's own effect allele, at its own sign, so a harmonised file scores
-exactly as the published model does:
+`keep-allele`, after the column numbers, skips the reorientation. Each weight
+stays on the source's own effect allele, at its own sign, so a harmonised file
+scores exactly as the published model does:
 
 ```sh
-adjutant --bim target.bim --pgs-models-list models.txt 1 2 3 4 5 \
-         --keep-effect-allele --out kept
+adjutant --bim target.bim --pgs-models-list models.txt 1 2 3 4 5 keep-allele --out kept
 ```
+
+It works the same on `--pgs-model`, with `id` matching, and after the optional
+sixth (frequency) column.
 
 After a strand flip the weight is written on the complement of the source's
 allele, which is the allele the target carries. In `.match_report`, `STATUS`
