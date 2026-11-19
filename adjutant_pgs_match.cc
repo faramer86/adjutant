@@ -264,13 +264,17 @@ typedef struct SrcVariantStruct {
   char*  bim_id;      // nullptr if unmatched
   char*  bim_chr;     // the matched .bim row's coordinates, for the report
   char*  bim_pos;
-  char*  out_a1;      // nullptr if unmatched
-  char*  out_a2;      // the target's other allele, for .matched
+  char*  out_a1;      // the allele written to .matched; nullptr if unmatched
+  char*  out_a2;      // the matched row's other allele
   double out_beta;
   // Row of the matched .bim entry, UINT32_MAX when unmatched.  --pgs-model
   // never needs it, but merging several models does: it keys the union and
   // orders it by .bim position without comparing ID strings.
   uint32_t bim_idx;
+  // out_a1 is the .bim's A2 rather than its A1.  Only --keep-effect-allele
+  // writes a weight there, and the merge needs to know which allele's row a
+  // weight belongs on.
+  uint32_t out_on_a2;
 } SrcVariant;
 
 // The key a source variant is looked up by, in whichever mode is active.
@@ -1038,6 +1042,7 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                              uint32_t allow_ambiguous,
                              uint32_t resolve_ambig,
                              double maf_threshold,
+                             uint32_t keep_effect,
                              const AfreqTable* afreq_tab,
                              MhcRegion mhc_region,
                              const char* flag,
@@ -1162,6 +1167,7 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
       sv->out_a2  = nullptr;
       sv->out_beta = 0.0;
       sv->bim_idx = UINT32_MAX;
+      sv->out_on_a2 = 0;
       const uint32_t key_alloc_ok = match_by_id? (sv->src_id != nullptr)
                                               : (sv->chr && sv->pos_str);
       if (!key_alloc_ok || !sv->src_a1 || !sv->src_a0) {
@@ -1266,17 +1272,31 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
         if (ms == kPgsMatchResolvedExact || ms == kPgsMatchResolvedReversed) {
           ++out->stats.n_resolved;
         }
-        // Matched: negate beta HERE (exactly once) for reversed outcomes.
+        // Matched.  A reversed outcome means the source's effect allele is
+        // the .bim's A2.  By default the weight moves to A1 and is negated
+        // HERE, exactly once.  --keep-effect-allele leaves it on A2 at the
+        // source's own sign, so the row scores exactly as the source does.
         double out_beta = sv->src_beta;
-        if (out_reversed) { out_beta = -out_beta; ++out->stats.n_reversed; }
+        uint32_t on_a2 = 0;
+        if (out_reversed) {
+          ++out->stats.n_reversed;
+          if (keep_effect) {
+            on_a2 = 1;
+          } else {
+            out_beta = -out_beta;
+          }
+        }
         if (ms == kPgsMatchFlipped || ms == kPgsMatchFlippedReversed) {
           ++out->stats.n_flipped;
         }
+        const char* w_a1 = on_a2? be->a0 : be->a1;
+        const char* w_a2 = on_a2? be->a1 : be->a0;
         sv->bim_id  = StrArenaDup(&out->strs, be->varid, (uint32_t)strlen(be->varid));
-        sv->out_a1  = StrArenaDup(&out->strs, be->a1, (uint32_t)strlen(be->a1));
-        sv->out_a2  = StrArenaDup(&out->strs, be->a0, (uint32_t)strlen(be->a0));
+        sv->out_a1  = StrArenaDup(&out->strs, w_a1, (uint32_t)strlen(w_a1));
+        sv->out_a2  = StrArenaDup(&out->strs, w_a2, (uint32_t)strlen(w_a2));
         sv->out_beta = out_beta;
         sv->bim_idx  = bim_idx;
+        sv->out_on_a2 = on_a2;
         if (!sv->bim_id || !sv->out_a1) {
           reterr = kPglRetNomem;
           goto HarmoniseModel_ret_1;
@@ -1351,8 +1371,8 @@ static const char* PgsStatusStr(PgsMatchStatus s) {
 // --pgs-model, which has no MODEL column, and the model's name for
 // --pgs-models-list, which prepends one.
 // Everything the merge still needs from a model once it has been harmonised
-// and its report rows written: which .bim row, and the weight w.r.t. that
-// row's A1.
+// and its report rows written: which .bim row, which of its alleles, and the
+// weight on that allele.
 //
 // This exists because holding whole PgsModelResults for every model did not
 // scale.  A SrcVariant is 88 bytes plus six separate strdups (chr, pos_str,
@@ -1362,16 +1382,22 @@ static const char* PgsStatusStr(PgsMatchStatus s) {
 // OOM-killed.  At 16 bytes a hit that becomes a few GB.
 typedef struct PgsModelHitStruct {
   uint32_t bim_idx;
+  uint32_t on_a2;      // SrcVariant.out_on_a2
   double   out_beta;
 } PgsModelHit;
 
-// Ascending by .bim row, so the writer can walk every model with a cursor
+// Output row of a hit: .bim row first, then its A1 before its A2.
+static uint64_t PgsModelHitKey(const PgsModelHit* h) {
+  return (S_CAST(uint64_t, h->bim_idx) << 1) | h->on_a2;
+}
+
+// Ascending by output row, so the writer can walk every model with a cursor
 // instead of materialising a dense union_ct x kept_ct matrix.  Dedup already
 // guarantees at most one hit per .bim row per model, so no tie-break is needed
 // and the sort does not have to be stable.
 static int PgsModelHitCmp(const void* aa, const void* bb) {
-  const uint32_t x = ((const PgsModelHit*)aa)->bim_idx;
-  const uint32_t y = ((const PgsModelHit*)bb)->bim_idx;
+  const uint64_t x = PgsModelHitKey((const PgsModelHit*)aa);
+  const uint64_t y = PgsModelHitKey((const PgsModelHit*)bb);
   return (x > y) - (x < y);
 }
 
@@ -1476,6 +1502,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t allow_ambiguous,
                    uint32_t resolve_ambig,
                    double maf_threshold,
+                   uint32_t keep_effect,
                    const char* read_freq_fname,
                    MhcRegion mhc_region,
                    char* outname,
@@ -1515,7 +1542,8 @@ PglErr RunPgsModel(const char* bim_fname,
   reterr = HarmoniseModel(&bx, pgs_model_fname, match_by_id, col_id,
                           col_chr, col_pos, col_effect, col_other,
                           col_weight, col_freq, allow_ambiguous,
-                          resolve_ambig, maf_threshold, &afreq_tab, mhc_region,
+                          resolve_ambig, maf_threshold, keep_effect,
+                          &afreq_tab, mhc_region,
                           "--pgs-model", pgs_model_fname, &res);
   if (unlikely(reterr)) goto RunPgsModel_ret_1;
 
@@ -1605,6 +1633,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t allow_ambiguous,
                         uint32_t resolve_ambig,
                         double maf_threshold,
+                        uint32_t keep_effect,
                         const char* read_freq_fname,
                         MhcRegion mhc_region,
                         char* outname,
@@ -1624,16 +1653,19 @@ PglErr RunPgsModelsList(const char* bim_fname,
   // One model is live at a time; `hits` keeps only the compact residue.
   PgsModelResult res;
   PgsModelResultPreinit(&res);
-  PgsModelHit** hits      = nullptr;   // per model, sorted by bim_idx
+  PgsModelHit** hits      = nullptr;   // per model, sorted by PgsModelHitKey
   uint32_t*     hit_ct    = nullptr;
   uint32_t      hits_ct   = 0;         // models whose hits[] slot is live
 
   uint32_t* keep_col  = nullptr;   // model -> output column, or UINT32_MAX
-  uint32_t* union_row = nullptr;   // bim row -> output row, or UINT32_MAX
+  // bim row -> which of its alleles carry an output row: bit 0 its A1, bit 1
+  // its A2.  Bit 1 is only ever set under --keep-effect-allele.
+  unsigned char* union_sides = nullptr;
   uint32_t* cursor    = nullptr;   // per kept column, position in its hits[]
   double*   rowbuf    = nullptr;   // one output row
   uint32_t  kept_ct   = 0;
-  uint32_t  union_ct  = 0;
+  uint32_t  union_ct  = 0;         // .bim variants in the union
+  uint32_t  split_ct  = 0;         // of those, written once per allele
 
   FILE* matched_f = nullptr;
   FILE* report_f  = nullptr;
@@ -1796,7 +1828,8 @@ PglErr RunPgsModelsList(const char* bim_fname,
     reterr = HarmoniseModel(&bx, paths[mi], match_by_id, col_id,
                             col_chr, col_pos, col_effect, col_other,
                             col_weight, col_freq, allow_ambiguous,
-                            resolve_ambig, maf_threshold, &afreq_tab, mhc_region,
+                            resolve_ambig, maf_threshold, keep_effect,
+                            &afreq_tab, mhc_region,
                             "--pgs-models-list", prog_label, &res);
     if (unlikely(reterr)) goto RunPgsModelsList_ret_1;
     const PgsModelStats* st = &res.stats;
@@ -1817,6 +1850,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
         const uint32_t bi = res.vars[ii].bim_idx;
         if (bi == UINT32_MAX) continue;
         hits[mi][nh].bim_idx  = bi;
+        hits[mi][nh].on_a2    = res.vars[ii].out_on_a2;
         hits[mi][nh].out_beta = res.vars[ii].out_beta;
         ++nh;
       }
@@ -1845,25 +1879,28 @@ PglErr RunPgsModelsList(const char* bim_fname,
     goto RunPgsModelsList_ret_1;
   }
 
-  union_row = (uint32_t*)malloc(bx.ct * sizeof(uint32_t));
-  if (!union_row) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
-  SetAllU32Arr(bx.ct, union_row);
+  // One output row per (variant, allele) that some model weights.  By default
+  // every weight is on the .bim's A1, so that is one row per variant.  Under
+  // --keep-effect-allele two models can name opposite effect alleles for one
+  // variant; each allele then gets its own row, with 0 under the models that
+  // use the other.  Neither weight can be moved onto the other allele without
+  // shifting that model's raw score, which is what the flag exists to avoid.
+  union_sides = (unsigned char*)calloc(bx.ct, 1);
+  if (!union_sides) { reterr = kPglRetNomem; goto RunPgsModelsList_ret_1; }
   for (uint32_t mi = 0; mi != model_ct; ++mi) {
     for (uint32_t ii = 0; ii != hit_ct[mi]; ++ii) {
-      union_row[hits[mi][ii].bim_idx] = 0;   // mark present
+      union_sides[hits[mi][ii].bim_idx] |= 1U << hits[mi][ii].on_a2;
     }
   }
-  // Number the marked rows in .bim order, so the output comes out sorted by
-  // target position without a sort.
   for (uint32_t bi = 0; bi != bx.ct; ++bi) {
-    if (union_row[bi] == 0) union_row[bi] = union_ct++;
-    else union_row[bi] = UINT32_MAX;
+    union_ct += (union_sides[bi] != 0);
+    split_ct += (union_sides[bi] == 3);
   }
 
-  // ---- Step 5: write.  Absent (model, variant) is 0. ----
+  // ---- Step 5: write, in .bim order.  Absent (model, row) is 0. ----
   //
   // Written a row at a time by advancing one cursor per model through its
-  // bim_idx-sorted hits, rather than materialising a union_ct x kept_ct matrix.
+  // key-sorted hits, rather than materialising a union_ct x kept_ct matrix.
   // That matrix was the second scaling term: 249 models against an 8M-variant
   // .bim would be 16 GB of doubles on its own.
   cursor = (uint32_t*)calloc(model_ct, sizeof(uint32_t));
@@ -1885,27 +1922,32 @@ PglErr RunPgsModelsList(const char* bim_fname,
   }
   fputc('\n', matched_f);
   for (uint32_t bi = 0; bi != bx.ct; ++bi) {
-    if (union_row[bi] == UINT32_MAX) continue;
-    for (uint32_t cc = 0; cc != kept_ct; ++cc) rowbuf[cc] = 0.0;
-    for (uint32_t mi = 0; mi != model_ct; ++mi) {
-      const uint32_t col = keep_col[mi];
-      if (col == UINT32_MAX) continue;
-      // Monotone: bi only increases, and hits[mi] is sorted by bim_idx, so
-      // every hit is examined at most once across the whole write.
-      uint32_t* cp = &(cursor[mi]);
-      while ((*cp < hit_ct[mi]) && (hits[mi][*cp].bim_idx < bi)) ++(*cp);
-      if ((*cp < hit_ct[mi]) && (hits[mi][*cp].bim_idx == bi)) {
-        rowbuf[col] = hits[mi][*cp].out_beta;
-        ++(*cp);
+    for (uint32_t on_a2 = 0; on_a2 != 2; ++on_a2) {
+      if (!(union_sides[bi] & (1U << on_a2))) continue;
+      const PgsModelHit row = {bi, on_a2, 0.0};
+      const uint64_t row_key = PgsModelHitKey(&row);
+      for (uint32_t cc = 0; cc != kept_ct; ++cc) rowbuf[cc] = 0.0;
+      for (uint32_t mi = 0; mi != model_ct; ++mi) {
+        const uint32_t col = keep_col[mi];
+        if (col == UINT32_MAX) continue;
+        // Monotone: row_key only increases, and hits[mi] is sorted by the
+        // same key, so every hit is examined at most once across the write.
+        uint32_t* cp = &(cursor[mi]);
+        while ((*cp < hit_ct[mi]) && (PgsModelHitKey(&hits[mi][*cp]) < row_key)) ++(*cp);
+        if ((*cp < hit_ct[mi]) && (PgsModelHitKey(&hits[mi][*cp]) == row_key)) {
+          rowbuf[col] = hits[mi][*cp].out_beta;
+          ++(*cp);
+        }
       }
+      const BimEntry* obe = &bx.entries[bi];
+      fprintf(matched_f, "%s\t%s\t%s\t%s\t%s",
+              obe->chr, obe->pos, obe->varid,
+              on_a2? obe->a0 : obe->a1, on_a2? obe->a1 : obe->a0);
+      for (uint32_t cc = 0; cc != kept_ct; ++cc) {
+        fprintf(matched_f, "\t%.15g", rowbuf[cc]);
+      }
+      fputc('\n', matched_f);
     }
-    const BimEntry* obe = &bx.entries[bi];
-    fprintf(matched_f, "%s\t%s\t%s\t%s\t%s",
-            obe->chr, obe->pos, obe->varid, obe->a1, obe->a0);
-    for (uint32_t cc = 0; cc != kept_ct; ++cc) {
-      fprintf(matched_f, "\t%.15g", rowbuf[cc]);
-    }
-    fputc('\n', matched_f);
   }
 
   fclose(report_f);  report_f  = nullptr;
@@ -1915,6 +1957,11 @@ PglErr RunPgsModelsList(const char* bim_fname,
   logprintf("--pgs-models-list: %u model%s, %u variant%s in the union.\n",
             kept_ct, kept_ct == 1 ? "" : "s",
             union_ct, union_ct == 1 ? "" : "s");
+  if (split_ct) {
+    logprintf("--pgs-models-list: %u variant%s written once per allele, where "
+              "models name different effect alleles.\n",
+              split_ct, split_ct == 1 ? "" : "s");
+  }
   logprintfww("--pgs-models-list: results written to %s.matched and "
               "%s.match_report .\n", outname, outname);
 
@@ -1923,7 +1970,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
   if (report_f)  { fclose(report_f);  report_f  = nullptr; }
   free(rowbuf);
   free(cursor);
-  free(union_row);
+  free(union_sides);
   free(keep_col);
   PgsModelResultFree(&res);
   if (hits) {

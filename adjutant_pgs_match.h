@@ -120,8 +120,9 @@ typedef struct PgsAmbigResolveStruct {
 // the sign is decided on zero evidence.
 //
 // *out_reversed is set to 1 for the reversed outcomes (including
-// kPgsMatchResolvedReversed); the CALLER negates beta.  The sign
-// decision is kept at one visible call site so it cannot be applied
+// kPgsMatchResolvedReversed); the CALLER negates beta, or under
+// --keep-effect-allele writes it against the target's a0 instead.  The
+// sign decision is kept at one visible call site so it cannot be applied
 // twice.
 //
 // Returns kPgsMatchNoAllele when no candidate matches.
@@ -151,6 +152,9 @@ PgsMatchStatus PgsMatchOne(const char* src_a0, const char* src_a1,
 //                     requires col_freq and read_freq_fname
 //   maf_threshold     refuse to resolve at or above this MAF, on the
 //                     source and on the target frequency alike
+//   keep_effect       if nonzero, write each weight on the source's own
+//                     effect allele at its own sign (--keep-effect-allele)
+//                     instead of on the .bim's A1
 //   read_freq_fname   target .afreq, or nullptr
 //   outname           output filename prefix (NUL-terminated)
 //   outname_end       pointer past the last character of the prefix
@@ -168,6 +172,7 @@ PglErr RunPgsModel(const char* bim_fname,
                    uint32_t allow_ambiguous,
                    uint32_t resolve_ambig,
                    double maf_threshold,
+                   uint32_t keep_effect,
                    const char* read_freq_fname,
                    MhcRegion mhc_region,
                    char* outname,
@@ -180,7 +185,7 @@ PglErr RunPgsModel(const char* bim_fname,
 // .bim through the same matching code --pgs-model uses, and writes
 // <out_prefix>.matched as
 //
-//   ID  A1  <model1>  <model2> ...
+//   CHR  POS  ID  A1  A2  <model1>  <model2> ...
 //
 // one row per variant matched by at least one model, in .bim order,
 // with 0 where a model does not carry that variant.
@@ -189,7 +194,8 @@ PglErr RunPgsModel(const char* bim_fname,
 // implementation detail: two models may name opposite effect alleles
 // for the same variant, so merging raw weight files on variant ID
 // would put one column's beta on the wrong allele and nothing
-// downstream would notice.  Every column here is w.r.t. the .bim's A1.
+// downstream would notice.  By default every column is w.r.t. the
+// .bim's A1.
 //
 // Reorienting a weight shifts the absolute score by a constant, and it
 // is worth knowing why that is acceptable rather than assuming it.  For
@@ -208,6 +214,13 @@ PglErr RunPgsModel(const char* bim_fname,
 // scores.  It fails for dominant/recessive effect types -- which is why
 // tools supporting those must split a model set across several files
 // instead of reorienting, and why one merged file always suffices here.
+//
+// keep_effect (--keep-effect-allele) does not reorient, so raw sums are
+// the source model's own.  Where two models name opposite effect alleles
+// for one variant, that variant gets one row per allele, A1's first,
+// each with 0 under the models that use the other; plink2 --score takes
+// a variant listed once per allele.  Rows where the models agree stay
+// merged.
 //
 // <out_prefix>.match_report is the --pgs-model report with a leading
 // MODEL column, concatenated across models.
@@ -240,6 +253,7 @@ PglErr RunPgsModelsList(const char* bim_fname,
                         uint32_t allow_ambiguous,
                         uint32_t resolve_ambig,
                         double maf_threshold,
+                        uint32_t keep_effect,
                         const char* read_freq_fname,
                         MhcRegion mhc_region,
                         char* outname,

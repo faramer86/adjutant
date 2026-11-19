@@ -127,7 +127,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  evaluation  --give-best-pgs --give-corr-matrix --pgs-pheno-pairs\n"
 "              --prevalence\n"
 "  harmonise   --bim --pgs-model --pgs-models-list\n"
-"              --allow-ambiguous --resolve-ambiguous\n"
+"              --allow-ambiguous --resolve-ambiguous --keep-effect-allele\n"
 "  runtime     --out --threads --memory --seed --silent --help --version\n"
 "\n"
 "OUTPUT   (<prefix> from --out, default 'adjutant')\n"
@@ -391,6 +391,20 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "\n"
 "  The two flags cannot be combined: mixing resolved and merely-kept\n"
 "  palindromes in one output would hide the difference in evidence.\n"
+               );
+    HelpPrint("keep-effect-allele\0", &help_ctrl, 1,
+"  --keep-effect-allele      Write each weight on the source's own effect\n"
+"                            allele at its own sign, rather than moving it to\n"
+"                            the .bim's A1 and negating it.  After a strand\n"
+"                            flip that is the complement of the source's\n"
+"                            allele, the one the target carries.  Raw score\n"
+"                            sums then equal the source model's; by default\n"
+"                            they move by 2*beta per reversed variant.\n"
+"                            --pgs-models-list writes a variant once per\n"
+"                            allele where models name different effect\n"
+"                            alleles, 0 under the models using the other.\n"
+"                            STATUS in .match_report still says REVERSED or\n"
+"                            FLIPPED; OUT_A1 and OUT_BETA are what was written.\n"
                );
 
     if (!param_ct) {

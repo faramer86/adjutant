@@ -547,6 +547,45 @@ A1, which is what makes them comparable.
 > the identity, so tools supporting them must split a model set across files
 > instead of reorienting it; adjutant is additive-only, so one merged file
 > always suffices.
+>
+> If you need the raw sums themselves, for example to compare with scores
+> computed elsewhere from the published model, `--keep-effect-allele` avoids
+> the shift. See the next section.
+
+### 5) Keeping each model's own effect allele
+
+`--keep-effect-allele` skips the reorientation. Each weight stays on the
+source's own effect allele, at its own sign, so a harmonised file scores
+exactly as the published model does:
+
+```sh
+adjutant --bim target.bim --pgs-models-list models.txt 1 2 3 4 5 \
+         --keep-effect-allele --out kept
+```
+
+After a strand flip the weight is written on the complement of the source's
+allele, which is the allele the target carries. In `.match_report`, `STATUS`
+still says `REVERSED` or `FLIPPED`, so the quality of each match stays visible,
+and `OUT_A1`/`OUT_BETA` show what was written.
+
+With `--pgs-models-list`, two models can name opposite effect alleles for one
+variant. That variant then gets one row per allele, with `0` under the models
+that use the other one. Rows where the models agree stay merged:
+
+| ID | A1 | A2 | pgs_alpha | pgs_beta |
+|---|---|---|---|---|
+| snp2 | A | G | 0.4 | 0 |
+| snp14 | C | T | -0.4 | **0** |
+| snp14 | **T** | C | **0** | **-0.5** |
+| snp19 | T | G | 0 | 0.4 |
+
+```
+--pgs-models-list: 2 models, 26 variants in the union.
+--pgs-models-list: 1 variant written once per allele, where models name different effect alleles.
+```
+
+`--score` takes a variant listed once per allele, just as stock plink2 does, and
+each column gives exactly the sum its model gives on its own.
 
 ---
 

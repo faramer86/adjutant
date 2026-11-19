@@ -453,6 +453,7 @@ typedef struct Plink2CmdlineStruct {
   uint32_t pgs_model_allow_ambiguous;  // --allow-ambiguous flag
   uint32_t pgs_model_resolve_ambig;    // --resolve-ambiguous flag
   double pgs_model_maf_threshold;      // --resolve-ambiguous argument
+  uint32_t pgs_model_keep_effect;      // --keep-effect-allele flag
   char* indep_preferred_fname;
   char* not_pheno_flattened;
   char* not_covar_flattened;
@@ -2170,6 +2171,7 @@ int main(int argc, char** argv) {
   pc.pgs_model_allow_ambiguous = 0;
   pc.pgs_model_resolve_ambig   = 0;
   pc.pgs_model_maf_threshold   = 0.4;
+  pc.pgs_model_keep_effect     = 0;
   pc.indep_preferred_fname = nullptr;
   pc.not_pheno_flattened = nullptr;
   pc.not_covar_flattened = nullptr;
@@ -2557,6 +2559,11 @@ int main(int argc, char** argv) {
             goto main_ret_1;
           }
           pc.filter_flags |= kfFilterPsamReq;
+        } else if (strequal_k_unsafe(flagname_p2, "eep-effect-allele")) {
+          if (unlikely(EnforceParamCtRange(argvk[arg_idx], param_ct, 0, 0))) {
+            goto main_ret_INVALID_CMDLINE_2A;
+          }
+          pc.pgs_model_keep_effect = 1;
         } else {
           goto main_ret_INVALID_CMDLINE_UNRECOGNIZED;
         }
@@ -3104,6 +3111,10 @@ int main(int argc, char** argv) {
       logerrputs("Error: --allow-ambiguous requires --pgs-model or --pgs-models-list.\n");
       goto main_ret_INVALID_CMDLINE_A;
     }
+    if (unlikely(pc.pgs_model_keep_effect && !harmonise_fname)) {
+      logerrputs("Error: --keep-effect-allele requires --pgs-model or --pgs-models-list.\n");
+      goto main_ret_INVALID_CMDLINE_A;
+    }
     if (pc.pgs_model_resolve_ambig) {
       if (unlikely(!harmonise_fname)) {
         logerrputs("Error: --resolve-ambiguous requires --pgs-model or --pgs-models-list.\n");
@@ -3416,6 +3427,7 @@ int main(int argc, char** argv) {
                            pc.pgs_model_allow_ambiguous,
                            pc.pgs_model_resolve_ambig,
                            pc.pgs_model_maf_threshold,
+                           pc.pgs_model_keep_effect,
                            pc.read_freq_fname,
                            pc.mhc_region,
                            outname, outname_end);
@@ -3437,6 +3449,7 @@ int main(int argc, char** argv) {
                                 pc.pgs_model_allow_ambiguous,
                                 pc.pgs_model_resolve_ambig,
                                 pc.pgs_model_maf_threshold,
+                                pc.pgs_model_keep_effect,
                                 pc.read_freq_fname,
                                 pc.mhc_region,
                                 outname, outname_end);
