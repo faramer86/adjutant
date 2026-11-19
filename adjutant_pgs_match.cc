@@ -13,6 +13,7 @@
 
 #include "adjutant_cmdline.h"
 #include "adjutant_decompress.h"
+#include "include/plink2_bits.h"
 #include "include/plink2_htable.h"
 #include "include/plink2_string.h"
 #include "include/plink2_text.h"
@@ -272,10 +273,7 @@ typedef struct SrcVariantStruct {
   uint32_t bim_idx;
 } SrcVariant;
 
-// The key a source variant joins on, in whichever mode is active.  One helper
-// so the lookup and the dedup pass cannot drift apart -- they must agree, or a
-// variant could match a .bim row and then fail to be recognised as its own
-// duplicate.
+// The key a source variant is looked up by, in whichever mode is active.
 static uint32_t SrcKey(const SrcVariant* sv, uint32_t match_by_id,
                        char* key_buf, uint32_t key_cap) {
   if (!match_by_id) {
@@ -684,8 +682,12 @@ static double AfreqLookupAlleleFreq(const AfreqTable* t, const char* varid,
 typedef struct PgsBimIndexStruct {
   BimEntry*    entries;
   uint32_t     ct;
-  uint32_t*    htable;
+  uint32_t*    htable;   // key -> the FIRST row with that key
   uint32_t     htsize;
+  // Row -> the next row with the same chr:pos key, in .bim order, UINT32_MAX
+  // at the end.  All UINT32_MAX under ID matching, where a repeated key is
+  // dropped instead.
+  uint32_t*    same_key_next;
   FlatStrStore keys;
   uint32_t     mhc_excluded_ct;  // .bim rows inside --exclude-*mhc-*
   uint32_t     no_id_ct;         // rows skipped for a '.' variant ID
@@ -697,6 +699,7 @@ static void PgsBimIndexPreinit(PgsBimIndex* bx) {
   bx->ct      = 0;
   bx->htable  = nullptr;
   bx->htsize  = 0;
+  bx->same_key_next = nullptr;
   bx->mhc_excluded_ct = 0;
   bx->no_id_ct = 0;
   bx->dup_id_ct = 0;
@@ -717,11 +720,13 @@ static void PgsBimIndexFree(PgsBimIndex* bx) {
   }
   free(bx->htable);
   bx->htable = nullptr;
+  free(bx->same_key_next);
+  bx->same_key_next = nullptr;
   FlatStrStoreFree(&bx->keys);
 }
 
-// Read the .bim (CHR ID CM POS A1 A2, no header) and build the
-// (chr \t pos) -> row hash table.
+// Read the .bim (CHR ID CM POS A1 A2, no header) and build the key -> row
+// hash table, with every later row at a chr:pos chained behind the first.
 static PglErr LoadBimIndex(const char* bim_fname, MhcRegion mhc_region, uint32_t match_by_id, const char* dup_fname, PgsBimIndex* bx) {
   PglErr reterr = kPglRetSuccess;
   uint32_t bim_cap = 65536;
@@ -837,33 +842,47 @@ static PglErr LoadBimIndex(const char* bim_fname, MhcRegion mhc_region, uint32_t
 
   bx->htsize = GetHtableFastSize(bx->ct);
   bx->htable = (uint32_t*)malloc(bx->htsize * sizeof(uint32_t));
-  if (!bx->htable) return kPglRetNomem;
+  bx->same_key_next = (uint32_t*)malloc(bx->ct * sizeof(uint32_t));
+  if (!bx->htable || !bx->same_key_next) return kPglRetNomem;
   SetAllU32Arr(bx->htsize, bx->htable);
+  SetAllU32Arr(bx->ct, bx->same_key_next);
 
-  // HtableAddNondup keeps the first insertion, so a duplicate key is simply
-  // not reachable.  That is the long-standing policy for chr:pos and it stays,
-  // but duplicate rsIDs are far more common than duplicate positions, so in ID
-  // mode they are counted and listed rather than passed over in silence.
+  // The table holds the first row of each key; a repeated key goes in only
+  // once, because IdHtableFind can only ever return that first row.
+  //
+  // Under chr:pos a repeated key is a multi-allelic site that the .bim splits
+  // into biallelic records -- FinnGen writes chr1:31094304 as both
+  // chr1_31094304_C_A and chr1_31094304_C_CA -- so the later rows are chained
+  // behind the first and matching tries every one of them.  The tail walk is
+  // quadratic in the rows at one position, and a split site has a handful.
+  //
+  // Under ID a repeated key is a repeated rsID, which names one variant twice,
+  // so the first row wins and the rest are counted and listed rather than
+  // passed over in silence.
   FILE* dup_f = nullptr;
   for (uint32_t ii = 0; ii < bx->ct; ++ii) {
     const char* k = bx->keys.ptrs[ii];
     const uint32_t klen = (uint32_t)strlen(k);
-    if (match_by_id) {
-      const uint32_t prev = IdHtableFind(k, bx->keys.ptrs, bx->htable, klen, bx->htsize);
-      if (prev != UINT32_MAX) {
-        ++bx->dup_id_ct;
-        if (dup_fname) {
-          if (!dup_f) {
-            dup_f = fopen(dup_fname, "w");
-            if (dup_f) fputs("#ID\tKEPT_ROW\tDROPPED_ROW\n", dup_f);
-          }
-          // 1-based rows, so they line up with the .bim as a text file.
-          if (dup_f) fprintf(dup_f, "%s\t%u\t%u\n", k, prev + 1, ii + 1);
-        }
-        continue;
-      }
+    const uint32_t first = IdHtableFind(k, bx->keys.ptrs, bx->htable, klen, bx->htsize);
+    if (first == UINT32_MAX) {
+      HtableAddNondup(k, klen, bx->htsize, ii, bx->htable);
+      continue;
     }
-    HtableAddNondup(k, klen, bx->htsize, ii, bx->htable);
+    if (!match_by_id) {
+      uint32_t tail = first;
+      while (bx->same_key_next[tail] != UINT32_MAX) tail = bx->same_key_next[tail];
+      bx->same_key_next[tail] = ii;
+      continue;
+    }
+    ++bx->dup_id_ct;
+    if (dup_fname) {
+      if (!dup_f) {
+        dup_f = fopen(dup_fname, "w");
+        if (dup_f) fputs("#ID\tKEPT_ROW\tDROPPED_ROW\n", dup_f);
+      }
+      // 1-based rows, so they line up with the .bim as a text file.
+      if (dup_f) fprintf(dup_f, "%s\t%u\t%u\n", k, first + 1, ii + 1);
+    }
   }
   if (dup_f) fclose(dup_f);
   return kPglRetSuccess;
@@ -949,8 +968,56 @@ static void PgsModelResultRecycle(PgsModelResult* r) {
 }
 
 // -------------------------------------------------------------------
+// Harmonise one source variant against every .bim row at its key, `first`
+// and the rows chained behind it, and return the row that fits best.
+//
+// Best is the lowest PgsMatchStatus; the header says why declaration order
+// is preference order.  Ties keep the earlier row, so a .bim that repeats
+// a variant outright resolves the way a single lookup always did.
+//
+// *out_afreq_hit is set when any row's ID was found in the .afreq, which
+// is all the "different ID schemes" warning needs to know.
+// -------------------------------------------------------------------
+static uint32_t MatchBestAtKey(const PgsBimIndex* bx, uint32_t first,
+                               const SrcVariant* sv,
+                               uint32_t allow_ambiguous,
+                               uint32_t resolve_ambig, double maf_threshold,
+                               const AfreqTable* afreq_tab,
+                               PgsMatchStatus* out_status,
+                               uint32_t* out_reversed,
+                               uint32_t* out_afreq_hit) {
+  uint32_t best_idx = UINT32_MAX;
+  *out_afreq_hit = 0;
+  for (uint32_t bi = first; bi != UINT32_MAX; bi = bx->same_key_next[bi]) {
+    const BimEntry* be = &bx->entries[bi];
+    PgsAmbigResolve resolve;
+    const PgsAmbigResolve* resolve_ptr = nullptr;
+    if (resolve_ambig) {
+      uint32_t id_found = 0;
+      resolve.maf_threshold = maf_threshold;
+      resolve.src_freq      = sv->src_freq;
+      resolve.tgt_a1_freq   = AfreqLookupAlleleFreq(afreq_tab, be->varid,
+                                                    be->a1, &id_found);
+      *out_afreq_hit |= id_found;
+      resolve_ptr = &resolve;
+    }
+    uint32_t reversed = 0;
+    const PgsMatchStatus ms = PgsMatchOne(sv->src_a0, sv->src_a1,
+                                          be->a0, be->a1,
+                                          allow_ambiguous, resolve_ptr,
+                                          &reversed);
+    if ((best_idx == UINT32_MAX) || (ms < *out_status)) {
+      best_idx      = bi;
+      *out_status   = ms;
+      *out_reversed = reversed;
+    }
+  }
+  return best_idx;
+}
+
+// -------------------------------------------------------------------
 // Read one weight file, match every row against the .bim index, and
-// dedup on (chr, pos).
+// dedup on the matched .bim row.
 //
 // This is the whole of the matching contract, and it has exactly one
 // implementation on purpose: --pgs-model is the one-model case and
@@ -978,9 +1045,7 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                              PgsModelResult* out) {
   PglErr reterr = kPglRetSuccess;
   uint32_t src_cap = 4096;
-  uint32_t*    dedup_htable = nullptr;
-  uint32_t     dedup_htsize = 0;
-  FlatStrStore dedup_store  = {nullptr, 0, 0, nullptr, 0, 0};
+  uintptr_t* bim_taken = nullptr;   // .bim rows already matched, for dedup
 
   TextStream txs;
   PreinitTextStream(&txs);
@@ -1168,38 +1233,31 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
                                 (uint32_t)sizeof(key_buf));
       if (!key_len) { sv->status = kPgsMatchNoPos; continue; }
 
-      uint32_t bim_idx = IdHtableFind(key_buf, bx->keys.ptrs,
-                                      bx->htable, key_len, bx->htsize);
-      if (bim_idx == UINT32_MAX) { sv->status = kPgsMatchNoPos; continue; }
+      const uint32_t first = IdHtableFind(key_buf, bx->keys.ptrs,
+                                          bx->htable, key_len, bx->htsize);
+      if (first == UINT32_MAX) { sv->status = kPgsMatchNoPos; continue; }
 
-      const BimEntry* be = &bx->entries[bim_idx];
       // Excluded on the target's authority, not the source's.  Tested after the
       // lookup because that is the only point where the position is known in
-      // both modes -- the ID route never sees one on the source side.
-      if (be->mhc_excluded) {
+      // both modes -- the ID route never sees one on the source side.  Every
+      // row at a key shares its position, so the first row speaks for all.
+      if (bx->entries[first].mhc_excluded) {
         ++out->stats.n_mhc_excluded;
         sv->status = kPgsMatchExcluded;
         continue;
       }
       ++out->stats.n_found_pos;
+      PgsMatchStatus ms;
+      uint32_t out_reversed;
+      uint32_t afreq_hit;
+      const uint32_t bim_idx = MatchBestAtKey(bx, first, sv, allow_ambiguous,
+                                              resolve_ambig, maf_threshold,
+                                              afreq_tab, &ms, &out_reversed,
+                                              &afreq_hit);
+      out->stats.n_afreq_id_hit += afreq_hit;
+      const BimEntry* be = &bx->entries[bim_idx];
       sv->bim_chr = StrArenaDup(&out->strs, be->chr, (uint32_t)strlen(be->chr));
       sv->bim_pos = StrArenaDup(&out->strs, be->pos, (uint32_t)strlen(be->pos));
-      PgsAmbigResolve resolve;
-      const PgsAmbigResolve* resolve_ptr = nullptr;
-      if (resolve_ambig) {
-        uint32_t id_found = 0;
-        resolve.maf_threshold = maf_threshold;
-        resolve.src_freq      = sv->src_freq;
-        resolve.tgt_a1_freq   = AfreqLookupAlleleFreq(afreq_tab, be->varid,
-                                                      be->a1, &id_found);
-        out->stats.n_afreq_id_hit += id_found;
-        resolve_ptr = &resolve;
-      }
-      uint32_t out_reversed = 0;
-      PgsMatchStatus ms = PgsMatchOne(sv->src_a0, sv->src_a1,
-                                      be->a0, be->a1,
-                                      allow_ambiguous, resolve_ptr,
-                                      &out_reversed);
       sv->status = ms;
       if (ms == kPgsMatchAmbiguous) { ++out->stats.n_ambiguous; }
       else if (ms == kPgsMatchAmbiguousUnresolved) { ++out->stats.n_unresolved; }
@@ -1215,8 +1273,6 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
           ++out->stats.n_flipped;
         }
         sv->bim_id  = StrArenaDup(&out->strs, be->varid, (uint32_t)strlen(be->varid));
-      sv->bim_chr = StrArenaDup(&out->strs, be->chr, (uint32_t)strlen(be->chr));
-      sv->bim_pos = StrArenaDup(&out->strs, be->pos, (uint32_t)strlen(be->pos));
         sv->out_a1  = StrArenaDup(&out->strs, be->a1, (uint32_t)strlen(be->a1));
         sv->out_a2  = StrArenaDup(&out->strs, be->a0, (uint32_t)strlen(be->a0));
         sv->out_beta = out_beta;
@@ -1235,26 +1291,19 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
     fputs("\b\b", stdout);
     logputs("done.\n");
 
-    // Dedup: keep the first occurrence of each (chr, pos); later matched
-    // occurrences become DUPLICATE.
-    const uint32_t nm = out->stats.n_matched ? out->stats.n_matched : 1;
-    dedup_store  = FlatStrStoreInit(1 << 16, nm);
-    dedup_htsize = GetHtableFastSize(nm);
-    dedup_htable = (uint32_t*)malloc(dedup_htsize * sizeof(uint32_t));
-    if (!dedup_store.buf || !dedup_store.ptrs || !dedup_htable) {
-      reterr = kPglRetNomem;
-      goto HarmoniseModel_ret_1;
-    }
-    SetAllU32Arr(dedup_htsize, dedup_htable);
+    // Dedup: the first source row to match a .bim row keeps it, and later
+    // rows matching the same one become DUPLICATE, so no weight is counted
+    // twice.  Keyed on the .bim row rather than on chr:pos: two source rows
+    // at one position that fit different rows -- the C/A and C/CA halves of
+    // a split site -- are two variants.  Under ID matching a row is one ID,
+    // so this is the same as keying on the ID.
+    bim_taken = (uintptr_t*)calloc(BitCtToWordCt(bx->ct), sizeof(uintptr_t));
+    if (!bim_taken) { reterr = kPglRetNomem; goto HarmoniseModel_ret_1; }
 
     for (uint32_t ii = 0; ii < out->ct; ++ii) {
       SrcVariant* sv = &out->vars[ii];
       if (!PgsMatchIsMatched(sv->status)) continue;
-      uint32_t key_len = SrcKey(sv, match_by_id, key_buf,
-                                (uint32_t)sizeof(key_buf));
-      uint32_t dedup_idx = IdHtableFind(key_buf, dedup_store.ptrs,
-                                        dedup_htable, key_len, dedup_htsize);
-      if (dedup_idx != UINT32_MAX) {
+      if (IsSet(bim_taken, sv->bim_idx)) {
         sv->status = kPgsMatchDuplicate;
         // Arena-owned: drop the reference, never free it here.
         sv->bim_id  = nullptr;
@@ -1267,18 +1316,14 @@ static PglErr HarmoniseModel(const PgsBimIndex* bx,
         ++out->stats.n_duplicate;
         --out->stats.n_matched;
       } else {
-        const char* stored = FlatStrStoreAdd(&dedup_store, key_buf, key_len);
-        if (!stored) { reterr = kPglRetNomem; goto HarmoniseModel_ret_1; }
-        uint32_t idx = dedup_store.ptr_ct - 1;
-        HtableAddNondup(key_buf, key_len, dedup_htsize, idx, dedup_htable);
+        SetBit(sv->bim_idx, bim_taken);
       }
     }
   }
 
  HarmoniseModel_ret_1:
   CleanupTextStream2(model_fname, &txs, &reterr);
-  free(dedup_htable);
-  FlatStrStoreFree(&dedup_store);
+  free(bim_taken);
   return reterr;
 }
 
@@ -1412,7 +1457,8 @@ static void LogModelSummary(const char* label, const PgsModelResult* r,
             label, st->n_matched, st->n_flipped, st->n_reversed,
             st->n_no_allele);
   if (st->n_duplicate) {
-    logprintf("%s: %u duplicate position%s dropped.\n",
+    logprintf("%s: %u duplicate%s dropped (an earlier source row matched the "
+              "same .bim variant).\n",
               label, st->n_duplicate, st->n_duplicate == 1 ? "" : "s");
   }
 }

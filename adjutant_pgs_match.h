@@ -30,6 +30,13 @@ namespace plink2 {
 // Exact/Reversed: a palindrome resolved by comparing allele frequencies
 // is a weaker inference than an allele match, and the report should not
 // hide that.
+//
+// Declaration order is preference order.  When several .bim rows share a
+// chr:pos, the source variant goes to the row giving the lowest status.
+// For one source variant PgsMatchOne draws every outcome from one family
+// -- AMBIGUOUS alone; or EXACT..FLIPPED_REVERSED then NO_ALLELE; or, under
+// --resolve-ambiguous, RESOLVED_* then AMBIGUOUS_UNRESOLVED then NO_ALLELE
+// -- and each family is in preference order here, failure last.  Keep it so.
 // -------------------------------------------------------------------
 typedef enum {
   kPgsMatchExact,
