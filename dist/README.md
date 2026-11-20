@@ -62,7 +62,7 @@ beyond what they share. Run the suites and the sweep again against the actual
 `make release` output before copying it here. The two are easy to tell apart by
 size: the release build is 1,330,648 bytes, the gate's is 1,464,824.
 
-`make release` is reproducible — two clean builds of `0769219` gave the same
+`make release` is reproducible — two clean builds of `372e269` gave the same
 SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
 different recipe, not build nondeterminism.
 
