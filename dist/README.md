@@ -62,7 +62,7 @@ beyond what they share. Run the suites and the sweep again against the actual
 `make release` output before copying it here. The two are easy to tell apart by
 size: the release build is 1,330,648 bytes, the gate's is 1,464,824.
 
-`make release` is reproducible — two clean builds of `409f5ce` gave the same
+`make release` is reproducible — two clean builds of `0769219` gave the same
 SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
 different recipe, not build nondeterminism.
 
@@ -136,6 +136,13 @@ The Linux binary is built on Debian bullseye (glibc 2.31, 2020) so it runs on
 older long-lived cluster images.
 
 ## Notable changes to check against
+
+**Plain `--help` prints each flag's summary; `--help <flag>` adds its notes.**
+The full reference used to follow the overview, 292 lines in all; plain
+`--help` is now 167. File formats, the `.best_pgs` column list, the matching
+rules, `keep-allele` and the MHC bounds print under `--help <flag>`. Plain
+`--help` still names `keep-allele`, under harmonise and in the `--pgs-model`
+summary, so a startup check that greps for it keeps working.
 
 **`keep-allele` keeps each model's own effect allele.** It is a trailing
 modifier after the column numbers of `--pgs-model` or `--pgs-models-list`, as
