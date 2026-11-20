@@ -34,7 +34,8 @@ anywhere and needs no `libopenblas0`. Its recipe is still below if you want it.
 ### "Static" means different things on the two platforms
 
 The Linux binary is genuinely `-static`: one file, no interpreter, verified in
-`busybox`, which carries no glibc at all.
+`busybox:musl`, which carries no glibc at all. Plain `busybox` (`latest`) now
+ships `libc.so.6` and the glibc loader, so running there proves nothing.
 
 **A fully static macOS binary is not possible.** Apple ships no static
 `libSystem` and has not supported statically linked executables for two decades,
@@ -59,19 +60,20 @@ no `-DNDEBUG` — while `make release` adds both. A green gate is therefore
 evidence about the unoptimised binary, and says nothing about the optimised one
 beyond what they share. Run the suites and the sweep again against the actual
 `make release` output before copying it here. The two are easy to tell apart by
-size: the release build is 1,330,792 bytes, the gate's is 1,449,416.
+size: the release build is 1,330,648 bytes, the gate's is 1,464,824.
 
-`make release` is reproducible — two clean builds of `b2f71f8` gave the same
+`make release` is reproducible — two clean builds of `409f5ce` gave the same
 SHA-256 — so a hash mismatch against `SHA256SUMS` means a different commit or a
 different recipe, not build nondeterminism.
 
 `score_check.sh` covers `--score` and nothing else, so everything built on top of
 it was exercised separately: plain and partitioned scoring, `--give-best-pgs`
 with and without `no-na`, `--give-corr-matrix`, `--pgs-pheno-pairs`,
-`--pgs-model` on both keys, `--pgs-models-list`, all four MHC regions on both
-routes, a `.sscore` wider than the old 1024-column ceiling, and the refusal of
-the `--extract`/`--exclude` interval modifiers. Sixteen commands, 27 outputs,
-compared by checksum across platforms.
+`--pgs-model` on both keys, `--pgs-models-list`, `keep-allele` on both of
+those, all four MHC regions on both routes, a `.sscore` wider than the old
+1024-column ceiling, and the refusal of the `--extract`/`--exclude` interval
+modifiers. Eighteen commands, 31 outputs, compared by checksum across
+platforms.
 
 **Make the sweep assert on each step.** The first version of it ran each command
 with `|| true` and checksummed whatever files appeared. Five of the sixteen were
@@ -84,8 +86,8 @@ from a skipped comparison. Name the file each step must produce and check it.
   input matrix, every `pgs_eval_check` assertion, and the demo.
 - **macOS vs Linux** — everything byte-identical except `--score` `.sscore`,
   where a handful of near-zero cells differ; see below. `.matched`,
-  `.match_report` (both key modes), the merged matrix and every MHC output all
-  agree exactly.
+  `.match_report` (both key modes, with and without `keep-allele`), the merged
+  matrix and every MHC output all agree exactly.
 
 A build verified only by `score_check.sh` has never executed `--give-best-pgs`,
 `--give-corr-matrix`, `--pgs-pheno-pairs`, `--score-partitions` or the MHC
@@ -99,13 +101,15 @@ goldens were generated with. It does not hold bit-for-bit on Linux, which uses
 gcc and OpenBLAS rather than clang and Accelerate.
 
 The disagreement is confined to cells whose value is **itself numerically zero**.
-Re-measured at every release, across the six `.sscore` outputs of the sweep:
+Re-measured at every release, across the six `.sscore` outputs of the
+eighteen-command sweep:
 **49 of 16,000 numeric cells** differ, by at most **4.16e-18**, and the largest
 value appearing in any differing cell is **1.04e-17**. Those are columns where
 the score cancels and only rounding residue survives — against scores of order
 0.1 they are zero. Every meaningful digit of every other field matches, and the
-other 21 outputs, including `.matched`, `.match_report` on both keys, the merged
-matrix, `.pgs_corr`, `.best_pgs` and every MHC output, are byte-identical.
+other 25 outputs, including `.matched`, `.match_report` on both keys and under
+`keep-allele`, the merged matrix, `.pgs_corr`, `.best_pgs` and every MHC
+output, are byte-identical.
 
 It is a property of the toolchain, not of any code change. The figures move a
 little between releases because they depend on which commands the sweep runs,
@@ -117,10 +121,11 @@ came from, or they read as a regression when the sweep merely grew.
 
 Neither binary needs anything installed.
 
-`adjutant-linux-x86_64-static` is verified by running it in `busybox`, which
-carries no glibc whatsoever. That costs size — 28 MB against about 1.6 MB for a
-dynamic build — and the bulk is OpenBLAS's per-CPU kernels, not debug info:
-`strip --strip-unneeded` recovers only about 1 MB, so it is left unstripped.
+`adjutant-linux-x86_64-static` is verified by running it in `busybox:musl`,
+which carries no glibc whatsoever. That costs size — 28 MB against about
+1.6 MB for a dynamic build — and the bulk is OpenBLAS's per-CPU kernels, not
+debug info: `strip --strip-unneeded` recovers only about 1 MB, so it is left
+unstripped.
 
 `adjutant-macos-arm64` links only `Accelerate.framework`, `libSystem.B.dylib`,
 `libz.1.dylib` and `libc++.1.dylib`, all shipped with the OS. Check with
@@ -131,6 +136,23 @@ The Linux binary is built on Debian bullseye (glibc 2.31, 2020) so it runs on
 older long-lived cluster images.
 
 ## Notable changes to check against
+
+**`keep-allele` keeps each model's own effect allele.** It is a trailing
+modifier after the column numbers of `--pgs-model` or `--pgs-models-list`, as
+in `--pgs-models-list models.txt 1 2 3 4 5 keep-allele`. By default a weight
+whose effect allele is the `.bim`'s A2 is negated and written against A1, which
+moves raw `SCORE_SUM` by a constant; with the modifier it stays on its own
+allele at its own sign, so raw sums are the source model's. A variant that two
+models weight on opposite alleles is then written on two rows, one per allele.
+Without the modifier nothing changes. A binary predating it refuses
+`keep-allele` as an invalid column index; `adjutant --help` lists it under
+harmonise.
+
+**`--pgs-model` considers every `.bim` record at a position.** It used to index
+only the first record per chr:pos, so where a site is split across several
+records a source variant matched only if the first one carried its alleles. On
+PGS000088 against a FinnGen `.bim` that cost 17 indels: 6,754 match now,
+against 6,737 before. ID matching is unchanged.
 
 **`--give-best-pgs cols=` pins the columns and their order.** `cols=PGS_ID,
 PHENO,R2_INCR,P` emits exactly those, in that order, so a positional parser
@@ -246,3 +268,13 @@ rather than with `file`, which is **not installed** in `debian:bullseye` — a
 check that silently rejected 19 good builds. And exclude the host's `bin/`
 from whatever you copy into the container: a stray macOS binary landing there
 turns an existence check into a false pass.
+
+**Bullseye's packages now come from `archive.debian.org`.** Debian 11 left LTS
+in 2026 and its security pool moved to the archive. `deb.debian.org` still
+serves a `bullseye-security` index naming those packages, so `apt-get update`
+succeeds and `apt-get install` then fails with 404s on `libc6-dev` and friends.
+Rewrite the sources before installing:
+
+```sh
+sed -i 's|http://deb.debian.org|http://archive.debian.org|' /etc/apt/sources.list
+```
