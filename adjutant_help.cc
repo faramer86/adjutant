@@ -96,10 +96,10 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "\n"
 "  1  SCORE      genotypes + weights  ->  .sscore\n"
 "  2  EVALUATE   scores + a phenotype ->  .best_pgs, .pgs_corr\n"
-"  3  HARMONISE  weights + a .bim     ->  .matched\n"
+"  3  HARMONISE  weights + a .bim     ->  .matched, .match_report\n"
 "\n"
-"1 and 2 run in one command.  2 also takes a ready-made score matrix via\n"
-"--sscore, needing no genotypes.  3 is standalone: two text files in, two out.\n"
+"1 and 2 run in one command, and 2 can start from a ready-made .sscore\n"
+"instead of genotypes.  3 runs on its own.\n"
 "\n"
 "EXAMPLES\n"
 "  Score one model:\n"
@@ -138,127 +138,135 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  .match_report  per-variant harmonisation status\n"
 "  .log           full record of the run\n"
 "\n"
-"Detail on any flag:  adjutant --help <flag>\n"
+"Each flag is summarised below.  For its notes and formats as well:\n"
+"  adjutant --help <flag>\n"
 , stdout);
   }
+  // Plain --help prints each flag's summary.  --help <flag> also prints the
+  // notes after it: the HelpPrint calls under `if (param_ct)` repeat the
+  // flag names of the summary they follow, so they print only when asked.
   do {
     if (!param_ct) {
       fputs("\nINPUT   One of --pfile / --bfile (genotypes) or --sscore (ready-made scores).\n\n", stdout);
     }
     HelpPrint("pfile\0bfile\0", &help_ctrl, 1,
-"  --pfile <prefix> ['vzs']  .pgen + .pvar + .psam.  'vzs' = .pvar is Zstd-\n"
-"                            compressed.\n"
+"  --pfile <prefix> ['vzs']  .pgen + .pvar + .psam.  'vzs': the .pvar is\n"
+"                            Zstd-compressed.\n"
 "  --bfile <prefix> ['vzs']  .bed + .bim + .fam.\n"
                );
     HelpPrint("sscore\0", &help_ctrl, 1,
-"  --sscore <file>           Load a score matrix instead of scoring genotypes:\n"
-"                            a .sscore from plink2 or adjutant, joined to\n"
-"                            --pheno/--covar on IID.  Column names become PGS\n"
-"                            IDs, minus any _AVG / _SUM suffix -- kept where\n"
-"                            dropping it would collide.\n"
-"                            Needs --give-best-pgs or --give-corr-matrix.\n"
+"  --sscore <file>           A score matrix in place of genotypes: a .sscore\n"
+"                            from plink2 or adjutant, joined to --pheno and\n"
+"                            --covar on IID.  Needs --give-best-pgs or\n"
+"                            --give-corr-matrix.\n"
                );
+    if (param_ct) {
+      HelpPrint("sscore\0", &help_ctrl, 1,
+"    Column names, minus any _AVG or _SUM suffix, become the PGS IDs; a\n"
+"    suffix stays where dropping it would make two names alike.\n"
+                 );
+    }
 
     if (!param_ct) {
       fputs("\nSCORING\n\n", stdout);
     }
     HelpPrint("score\0", &help_ctrl, 1,
 "  --score <file> [i] [j] [k] [modifiers...]\n"
-"                            Apply a linear scoring system.  One line per\n"
-"                            (variant, allele) pair: variant ID in column i\n"
-"                            (default 1), allele in j (default i+1), weight in\n"
-"                            k (default j+1).\n"
+"                            Apply a linear score.  One line per (variant,\n"
+"                            allele): variant ID in column i (default 1),\n"
+"                            allele in j (default i+1), weight in k (default\n"
+"                            j+1).\n"
 "\n"
 "    Modifiers:\n"
-"      header-read           first line holds score names (else SCORE1, ...)\n"
-"      header                skip the first line without naming scores\n"
+"      header-read           first line names the scores (else SCORE1, ...)\n"
+"      header                skip the first line\n"
 "      no-mean-imputation    drop missing genotypes instead of imputing them\n"
-"      center                shift genotypes to mean zero\n"
-"      variance-standardize  ...and to variance one\n"
-"      dominant / recessive  dosage>1 -> 1 / max(dosage-1, 0).  Not on chrX\n"
-"      se                    treat weights as standard errors; report the\n"
-"                            standard error of the score\n"
+"      center                shift genotypes to mean 0\n"
+"      variance-standardize  ...and to variance 1\n"
+"      dominant / recessive  dosage>1 -> 1 / max(dosage-1, 0); not on chrX\n"
+"      se                    weights are standard errors; report the score's\n"
+"                            standard error\n"
 "      zs                    Zstd-compress the output\n"
 "      list-variants[-zs]    also write <prefix>.sscore.vars\n"
 "      ignore-dup-ids        keep the first of duplicated variant IDs\n"
-"      cols=[+/-]<set>       add or drop output columns; cols=+scoresums adds\n"
-"                            the unaveraged sums\n"
+"      cols=[+/-]<set>       add or drop output columns; +scoresums adds the\n"
+"                            unaveraged sums\n"
 "\n"
                );
     HelpPrint("score-col-nums\0score\0", &help_ctrl, 1,
 "  --score-col-nums <n...>   Score several weight columns in one pass, e.g.\n"
-"                            3-12.  Each becomes its own output column, named\n"
-"                            from the header.\n"
+"                            3-12, each to an output column named from the\n"
+"                            header.\n"
                );
     HelpPrint("score-partitions\0", &help_ctrl, 1,
-"  --score-partitions <file> Split each model into variant subsets and score\n"
-"                            every subset separately, in one pass.\n"
-"\n"
-"    <file> is a variant ID column then one 0/1 column per partition, named by\n"
-"    the header.  Values must be exactly 0 or 1.\n"
+"  --score-partitions <file> Also score subsets of each model's variants, in\n"
+"                            the same pass.\n"
+               );
+    if (param_ct) {
+      HelpPrint("score-partitions\0", &help_ctrl, 1,
+"    <file> has a variant ID column, then one column of 0s and 1s per\n"
+"    partition, named by the header:\n"
 "      SNP     PART_A  PART_B\n"
-"      rs1231  0         1\n"
+"      rs1231  0       1\n"
 "\n"
-"    Output is the ordinary .sscore, one column per (model, partition),\n"
-"    grouped by model with the unpartitioned total first:\n"
+"    The .sscore gets a column per (model, partition), by model, total first:\n"
 "      W1_AVG  W1_PART_A_AVG  W1_PART_B_AVG  W2_AVG ...\n"
 "\n"
-"    Each partition's _AVG divides by ITS OWN variants' allele count, so\n"
-"    partitions of different sizes stay comparable.  They therefore do NOT sum\n"
-"    to the total; use cols=+scoresums for that.  ALLELE_CT, DENOM and\n"
-"    NAMED_ALLELE_DOSAGE_SUM describe the total.\n"
-"\n"
-               );
+"    A partition's _AVG divides by its own allele count, so partitions of\n"
+"    different sizes compare but do not add up to the total; cols=+scoresums\n"
+"    gives sums.  ALLELE_CT, DENOM and NAMED_ALLELE_DOSAGE_SUM describe the\n"
+"    total.\n"
+                 );
+    }
     HelpPrint("read-freq\0", &help_ctrl, 1,
 "  --read-freq <file>        Allele frequencies for mean-imputation, instead\n"
 "                            of computing them from the data.\n"
                );
 
     if (!param_ct) {
-      fputs("\nFILTERS   Optional.  Each takes file(s) of IDs, one per line.\n\n", stdout);
+      fputs("\nFILTERS   Optional.\n\n", stdout);
     }
     HelpPrint("keep\0remove\0extract\0exclude\0", &help_ctrl, 1,
 "  --keep <f...> / --remove <f...>\n"
-"                            Keep / drop samples.  Two columns, FID then IID;\n"
-"                            an IID-only list matches nothing.\n"
+"                            Keep / drop the samples listed, FID then IID on\n"
+"                            each line; an IID-only list matches nothing.\n"
 "  --extract <f...> / --exclude <f...>\n"
-"                            Keep / drop variants, by ID.\n"
+"                            Keep / drop the variants listed, one ID per line.\n"
                );
     HelpPrint("exclude-mhc-hg19\0exclude-mhc-hg38\0exclude-xmhc-hg19\0exclude-xmhc-hg38\0", &help_ctrl, 1,
 "  --exclude-mhc-hg19 / --exclude-mhc-hg38\n"
-"                            Drop chr6 MHC.  hg19 28477797-33448354,\n"
-"                            hg38 28510120-33480577.\n"
+"                            Drop the chr6 MHC, on the genome build named.\n"
 "  --exclude-xmhc-hg19 / --exclude-xmhc-hg38\n"
-"                            Drop the extended MHC.  hg19 25726291-33368421,\n"
-"                            hg38 25726063-33400644.\n"
-"\n"
-"  Bounds are inclusive.  One region flag per run; not valid with --sscore.\n"
-"  Applies to --score and to --bim/--pgs-model alike.  Nothing auto-detects\n"
-"  the build, and the wrong flag silently drops the wrong window.\n"
-"\n"
-"  xMHC is NOT a superset of MHC: it reaches further 5' but stops ~80kb short\n"
-"  3', so it can drop fewer variants.  The two regions come from different\n"
-"  published definitions.\n"
+"                            Drop the extended MHC (not a superset of MHC).\n"
                );
+    if (param_ct) {
+      HelpPrint("exclude-mhc-hg19\0exclude-mhc-hg38\0exclude-xmhc-hg19\0exclude-xmhc-hg38\0", &help_ctrl, 1,
+"    Regions, bounds inclusive:\n"
+"      MHC   hg19 28477797-33448354   hg38 28510120-33480577\n"
+"      xMHC  hg19 25726291-33368421   hg38 25726063-33400644\n"
+"\n"
+"    One region flag per run, on --score or on --bim/--pgs-model, not on\n"
+"    --sscore.  The build is not detected, so the wrong flag drops the wrong\n"
+"    window.  xMHC starts further 5' than MHC but ends ~80kb sooner 3', so it\n"
+"    can drop fewer variants.\n"
+                 );
+    }
 
     if (!param_ct) {
       fputs("\nPHENOTYPE AND COVARIATES   Required by --give-best-pgs.\n\n", stdout);
     }
     HelpPrint("pheno\0pheno-name\0pheno-col-nums\0", &help_ctrl, 1,
-"  --pheno <file>            Load phenotypes.  ADDS to any in the .psam/.fam\n"
-"                            rather than replacing them, so --pheno-name is\n"
-"                            usually wanted too.  A categorical phenotype is\n"
-"                            skipped with a warning, not an error.\n"
-"  --pheno-name <name...>    Select phenotype column(s) by name.\n"
-"  --pheno-col-nums <n...>   ...or by 1-based index.  Not with --pheno-name.\n"
-"\n"
-"    Several selections are allowed; each gets its own block of output rows.\n"
-"\n"
+"  --pheno <file>            Load phenotypes, added to any in the .psam/.fam,\n"
+"                            so --pheno-name is usually wanted too.  A\n"
+"                            categorical phenotype is skipped with a warning.\n"
+"  --pheno-name <name...>    Select phenotype columns by name...\n"
+"  --pheno-col-nums <n...>   ...or by 1-based index, not both.  Each selected\n"
+"                            phenotype gets its own block of output rows.\n"
                );
     HelpPrint("covar\0covar-name\0", &help_ctrl, 1,
 "  --covar <file>            Load covariates.  Without them the null model is\n"
 "                            intercept-only.\n"
-"  --covar-name <name...>    Select covariate column(s) by name.\n"
+"  --covar-name <name...>    Select covariate columns by name.\n"
                );
 
     if (!param_ct) {
@@ -266,144 +274,137 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
     }
     HelpPrint("give-best-pgs\0", &help_ctrl, 1,
 "  --give-best-pgs [no-na | cols=<names>]\n"
-"                            Rank scores by how much each adds to a\n"
-"                            covariates-only null model.  Writes\n"
-"                            <prefix>.best_pgs, one row per (phenotype,\n"
-"                            model), sorted by R2_INCR within each phenotype.\n"
-"\n"
-"    Needs a phenotype and either --score or --sscore.  Quantitative\n"
-"    phenotypes are fitted by OLS, case/control by logistic regression.\n"
-"\n"
-"    20 columns; the README has the full reference.  The sort key R2_INCR is\n"
-"    observed-scale for both trait types, not a pseudo-R2 of the logistic fit.\n"
-"    R2L_* need --prevalence; OR and AUC_* are case/control only.\n"
-"\n"
-"    'no-na' omits the columns this run cannot fill, which is 8 of the 20 when\n"
-"    every phenotype is quantitative.  N_CASE, OR and AUC_* go when no\n"
-"    phenotype is case/control; R2L_* go when --prevalence is absent as well.\n"
-"    The rule is the configuration, not the data, so the columns follow from\n"
-"    the command line and a column left empty by a failed fit still appears.\n"
-"\n"
-"    'cols=' names the columns to emit, comma-separated, and emits them in the\n"
-"    order named -- e.g. cols=PGS_ID,PHENO,R2_INCR,P.  That is the way to make\n"
-"    a positional parser safe: you fix the positions, so nothing a later\n"
-"    version adds or removes can move them.  An unknown or repeated name is a\n"
-"    parse error.  The names are the header ones without the leading '#':\n"
+"                            Rank scores by what each adds to a covariates-\n"
+"                            only null model.  Writes <prefix>.best_pgs, one\n"
+"                            row per (phenotype, model), sorted by R2_INCR.\n"
+"                            Needs a phenotype and --score or --sscore.\n"
+"                            'no-na' drops the columns a run cannot fill;\n"
+"                            'cols=' picks the columns and their order.\n"
+               );
+    if (param_ct) {
+      HelpPrint("give-best-pgs\0", &help_ctrl, 1,
+"    Quantitative phenotypes are fitted by OLS, case/control by logistic\n"
+"    regression.  The columns (the README has the full reference):\n"
 "      PGS_ID PHENO TYPE N N_CASE BETA OR SE P R2_NULL R2_FULL R2_INCR\n"
 "      R2_INCR_L95 R2_INCR_U95 R2L_INCR R2L_INCR_L95 R2L_INCR_U95\n"
 "      AUC_NULL AUC_FULL AUC_INCR\n"
+"    R2_INCR is observed-scale for both trait types, not a pseudo-R2.  R2L_*\n"
+"    need --prevalence; OR and AUC_* are case/control only.\n"
 "\n"
-"    Read the interval before the ranking.  Over many candidates the winner is\n"
-"    partly the luckiest, and R2_INCR_L95/U95 describe a model chosen in\n"
-"    advance, not one picked as the maximum of many.  To quote a number for the\n"
-"    winner, select on one subset and report on another.\n"
+"    no-na         drop N_CASE, OR and AUC_* when no phenotype is\n"
+"                  case/control, and R2L_* then too or without --prevalence.\n"
+"                  The command line decides, not the data: a column a failed\n"
+"                  fit left empty still shows.\n"
+"    cols=<names>  emit exactly these columns, in this order, e.g.\n"
+"                  cols=PGS_ID,PHENO,R2_INCR,P.  Names as above; an unknown\n"
+"                  or repeated one is an error.  Use it to parse by\n"
+"                  position: no later version can move these columns.\n"
 "\n"
-               );
+"    Over many candidates the winner is partly the luckiest, and\n"
+"    R2_INCR_L95/U95 hold for a model chosen in advance.  To quote a number\n"
+"    for the winner, select on one subset and report on another.\n"
+                 );
+    }
     HelpPrint("give-corr-matrix\0", &help_ctrl, 1,
-"  --give-corr-matrix        Pearson correlation matrix across the scored\n"
-"                            models -> <prefix>.pgs_corr.\n"
-"\n"
-"    Needs only scores: no phenotype, no --give-best-pgs.  A full square\n"
-"    matrix, 12 significant digits, computed over EVERY sample -- not the\n"
-"    complete-case set behind any one R2.  A constant column is NA, not 0.\n"
+"  --give-corr-matrix        Pearson correlations between the scored models\n"
+"                            -> <prefix>.pgs_corr.  Needs only scores.\n"
+               );
+    if (param_ct) {
+      HelpPrint("give-corr-matrix\0", &help_ctrl, 1,
+"    A square matrix, 12 significant digits, over every sample (not the\n"
+"    complete cases behind any one R2).  A constant column is NA, not 0.\n"
 "    The header line starts with '#', so read it as:\n"
 "      R:      read.table(f, header=TRUE, comment.char=\"\", row.names=1)\n"
 "      pandas: read_csv(f, sep='\\t', index_col=0)\n"
-"\n"
-               );
+                 );
+    }
     HelpPrint("pgs-pheno-pairs\0", &help_ctrl, 1,
-"  --pgs-pheno-pairs <file>  Evaluate only the listed (phenotype, PGS) pairs\n"
-"                            instead of every combination.\n"
-"\n"
+"  --pgs-pheno-pairs <file>  Evaluate only the listed (phenotype, PGS) pairs.\n"
+               );
+    if (param_ct) {
+      HelpPrint("pgs-pheno-pairs\0", &help_ctrl, 1,
 "    Two whitespace-separated columns, '#' comments:\n"
 "      QT1      PGS000123\n"
 "      CC_DIAB  PGS000789\n"
-"\n"
-"    A filter, not a selector: all phenotypes still load, so this is mutually\n"
-"    exclusive with --pheno-name / --pheno-col-nums.  An unknown name is an\n"
-"    error, not a skipped row.\n"
-"\n"
-               );
+"    Every phenotype still loads, so this excludes --pheno-name and\n"
+"    --pheno-col-nums.  An unknown name is an error.\n"
+                 );
+    }
     HelpPrint("prevalence\0", &help_ctrl, 1,
 "  --prevalence <val>        Population prevalence in (0,1), for liability-\n"
 "                            scale R^2 (Lee 2012).  Case/control only.\n"
                );
+
     if (!param_ct) {
-      fputs("\nHARMONISATION   Standalone.  Aligns a weight file to a target .bim.\n\n", stdout);
+      fputs("\nHARMONISATION   Standalone.  Aligns weight files to a target .bim.\n\n", stdout);
     }
     HelpPrint("bim\0pgs-model\0pgs-models-list\0", &help_ctrl, 1,
-"  --bim <file>              Target .bim, defining the wanted allele coding.\n"
+"  --bim <file>              Target .bim; its alleles set the output coding.\n"
 "  --pgs-model <file> <chr> <pos> <effect> <other> <weight> [<freq>]\n"
 "  --pgs-model <file> id <id> <effect> <other> <weight> [<freq>]\n"
-"                            Weight file plus the 1-based column numbers of\n"
-"                            each field.  <freq> is only for\n"
-"                            --resolve-ambiguous.  A trailing 'keep-allele'\n"
-"                            modifier keeps each weight on its own effect\n"
-"                            allele; see below.\n"
+"                            A weight file and the 1-based column of each\n"
+"                            field, matched on chr:pos or, after 'id', on the\n"
+"                            .bim's variant ID.  Weights must be betas.  A\n"
+"                            trailing 'keep-allele' keeps each weight on its\n"
+"                            own effect allele.\n"
 "  --pgs-models-list <list> <chr> <pos> <effect> <other> <weight> [<freq>]\n"
 "  --pgs-models-list <list> id <id> <effect> <other> <weight> [<freq>]\n"
 "                            The same for a file of weight-file paths, merged\n"
-"                            into one matrix; the column numbers apply to all\n"
-"                            of them.  Non-overlapping variants get weight 0;\n"
-"                            each column is named from the file's basename.\n"
-"\n"
-"  'keep-allele' after the column numbers writes each weight on the source's\n"
-"  own effect allele at its own sign, instead of moving it to the .bim's A1\n"
-"  and negating it.  After a strand flip that is the complement of the\n"
-"  source's allele, the one the target carries.  Raw score sums then equal\n"
-"  the source model's; by default they move by 2*beta per reversed variant.\n"
-"  With --pgs-models-list, a variant whose models name different effect\n"
-"  alleles gets one row per allele, 0 under the models using the other; rows\n"
-"  where they agree stay merged.  STATUS in .match_report still says REVERSED\n"
-"  or FLIPPED; OUT_A1 and OUT_BETA are what was written.\n"
-"\n"
-"  --pgs-model and --pgs-models-list match variants on chr:pos, or on the\n"
-"  .bim's variant ID when the column list starts with 'id'.  Alleles are then\n"
-"  tried in four representations -- exact, reversed, flipped, flipped+reversed\n"
-"  -- and the beta is negated when the effect and other alleles swap.\n"
-"  Reimplements bigsnpr::snp_match().\n"
-"\n"
-"  Where the .bim holds several records at one chr:pos, as when a\n"
-"  multi-allelic site is split into biallelic records, a variant goes to the\n"
-"  record its alleles fit, in that same order of preference.  A source row\n"
-"  that matches a .bim record an earlier row already matched is DUPLICATE.\n"
-"\n"
-"  Weights MUST be betas.  Negating an odds ratio is meaningless; a warning\n"
-"  fires if every weight is positive with mean in [0.5, 2.0].\n"
-"\n"
-"  'id' survives a build mismatch between the weight file and the target, but\n"
-"  trades it for rsID versioning: merged or retired rsIDs can fail to match,\n"
-"  or match the wrong variant, with nothing in the coordinates to show it.\n"
-"  Read the match rate the run prints; a low one means the two files disagree\n"
-"  about what an rsID means.  Rows with a '.' ID are skipped on both sides;\n"
-"  where a .bim repeats an ID the first row wins, the rest going to\n"
-"  <prefix>.duplicate_ids.\n"
-"\n"
-"  <prefix>.matched is CHR POS ID A1 A2 then one weight column per model,\n"
-"  every identifying field taken from the matched .bim row -- so it carries\n"
-"  the target's coordinates, not the source's.  Feed it to --score with column\n"
-"  3 as the ID, 4 as the allele, and --score-col-nums for the weights.\n"
-"  <prefix>.match_report gives a per-variant STATUS with both sides of the\n"
-"  join: SRC_ID/SRC_CHR/SRC_POS as supplied, BIM_CHR/BIM_POS as matched.\n"
-"\n"
+"                            into one matrix with a column per file.\n"
                );
+    if (param_ct) {
+      HelpPrint("bim\0pgs-model\0pgs-models-list\0", &help_ctrl, 1,
+"    <freq> is only for --resolve-ambiguous.  With --pgs-models-list the\n"
+"    column numbers apply to every file; each column is named from the\n"
+"    file's basename, with 0 where a model lacks the variant.\n"
+"\n"
+"    Matching.  Once the position or ID matches, alleles are tried exact,\n"
+"    reversed, flipped, then flipped+reversed, and the beta is negated when\n"
+"    effect and other swap (as in bigsnpr::snp_match()).  Where the .bim has\n"
+"    several records at one chr:pos, as for a split multi-allelic site, a\n"
+"    variant goes to the record its alleles fit.  A source row matching a\n"
+"    record an earlier row already took is DUPLICATE.\n"
+"\n"
+"    'keep-allele' after the column numbers writes each weight on the\n"
+"    source's own effect allele at its own sign (the complement after a\n"
+"    strand flip), so raw score sums equal the source model's.  By default a\n"
+"    weight moves to the .bim's A1, negated, and the sums shift by 2*beta per\n"
+"    reversed variant.  With --pgs-models-list, models that weight a variant\n"
+"    on different alleles get one row per allele.  .match_report STATUS\n"
+"    still says REVERSED or FLIPPED; OUT_A1 and OUT_BETA are what was written.\n"
+"\n"
+"    Weights must be betas: negating an odds ratio is meaningless.  A warning\n"
+"    fires if every weight is positive with mean in [0.5, 2.0].\n"
+"\n"
+"    'id' survives a build mismatch but trusts rsIDs: a merged or retired\n"
+"    rsID can miss, or match the wrong variant with nothing to show it.\n"
+"    Check the match rate the run prints.  '.' IDs are skipped on both\n"
+"    sides; where the .bim repeats an ID the first row wins and the rest go\n"
+"    to <prefix>.duplicate_ids.\n"
+"\n"
+"    <prefix>.matched is CHR POS ID A1 A2, then a weight column per model,\n"
+"    every field from the matched .bim row.  Feed it to --score with column\n"
+"    3 as the ID, 4 as the allele, and --score-col-nums for the weights.\n"
+"    <prefix>.match_report gives each variant's STATUS and both sides of the\n"
+"    join: SRC_ID/SRC_CHR/SRC_POS as supplied, BIM_CHR/BIM_POS as matched.\n"
+                 );
+    }
     HelpPrint("allow-ambiguous\0resolve-ambiguous\0", &help_ctrl, 1,
-"  --allow-ambiguous         Keep strand-ambiguous (A/T, C/G) variants on their\n"
-"                            exact match instead of dropping them.  Assumes\n"
-"                            both files are on the same strand -- if they are\n"
-"                            not, those betas get the wrong sign.\n"
-"  --resolve-ambiguous [maf] Decide them by allele frequency instead: needs\n"
-"                            <freq> on --pgs-model and --read-freq for the\n"
-"                            target, and the two must come from COMPARABLE\n"
-"                            ANCESTRIES -- the comparison cannot tell a strand\n"
-"                            difference from a population one.  Refuses when\n"
-"                            EITHER the source or the target MAF reaches [maf]\n"
-"                            (default 0.4), where the two strand hypotheses\n"
-"                            are indistinguishable.\n"
-"\n"
-"  The two flags cannot be combined: mixing resolved and merely-kept\n"
-"  palindromes in one output would hide the difference in evidence.\n"
+"  --allow-ambiguous         Keep strand-ambiguous (A/T, C/G) variants on\n"
+"                            their exact match; safe only if both files share\n"
+"                            a strand.\n"
+"  --resolve-ambiguous [maf] Decide them by allele frequency instead.  Not\n"
+"                            with --allow-ambiguous.\n"
                );
+    if (param_ct) {
+      HelpPrint("allow-ambiguous\0resolve-ambiguous\0", &help_ctrl, 1,
+"    With --allow-ambiguous, variants on opposite strands keep a beta of the\n"
+"    wrong sign.  --resolve-ambiguous needs <freq> on --pgs-model, --read-freq\n"
+"    for the target, and comparable ancestries: frequencies cannot tell a\n"
+"    strand difference from a population one.  A variant stays unresolved\n"
+"    when its source or target MAF reaches [maf] (default 0.4).\n"
+                 );
+    }
 
     if (!param_ct) {
       fputs("\nRUNTIME\n\n", stdout);
@@ -414,7 +415,7 @@ PglErr DispHelp(const char* const* argvk, uint32_t param_ct) {
 "  --memory <MiB>            Main workspace size.\n"
 "  --seed <n>                Random seed.\n"
 "  --silent                  Suppress stdout; the .log is still written.\n"
-"  --help [flag...]          This text, or detail on the named flags.\n"
+"  --help [flag...]          This text, or a flag's summary and notes.\n"
 "  --version                 Print version and exit.\n"
                );
   } while (help_ctrl.iters_left--);
